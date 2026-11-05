@@ -59,3 +59,9 @@ frontend/.next/
 backend/data/qdrant/
 backend/data/neo4j/
 backend/data/indexes/
+
+# ==========================================
+# Private Scenario Data
+# ==========================================
+/.local/
+/backend/data/scenario/engine_only/

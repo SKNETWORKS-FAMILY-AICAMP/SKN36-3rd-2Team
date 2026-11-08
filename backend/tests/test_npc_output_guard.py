@@ -434,3 +434,50 @@ def test_model_generated_secret_not_displayed():
 
     assert result.grounded is False
     assert secret not in result.text
+
+
+def test_invalid_first_response_retries_once():
+    """첫 응답 오류 후 정상 인용을 받으면 승인한다."""
+
+    context = make_context()
+
+    generator = MagicMock(
+        side_effect=[
+            '{"quotes": []}',
+            make_output(),
+        ]
+    )
+
+    result = run_grounded_npc_response(
+        make_plan(context),
+        context,
+        generate=generator,
+    )
+
+    assert result.grounded is True
+    assert result.source_ids == ("K-C01-01",)
+    assert generator.call_count == 2
+
+
+def test_invalid_retry_still_blocks_response():
+    """재시도까지 실패하면 근거 없는 답변을 차단한다."""
+
+    context = make_context()
+
+    generator = MagicMock(
+        side_effect=[
+            '{"quotes": []}',
+            '{"quotes": []}',
+        ]
+    )
+
+    result = run_grounded_npc_response(
+        make_plan(context),
+        context,
+        generate=generator,
+    )
+
+    assert result.grounded is False
+    assert result.source_ids == ()
+    assert result.text == FALLBACK_REPLY
+    assert generator.call_count == 2

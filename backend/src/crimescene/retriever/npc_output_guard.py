@@ -1,6 +1,7 @@
 """CASE-001 NPC LLM 응답의 출처 및 원문 인용 검증."""
 
 import json
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -39,6 +40,24 @@ QUOTE_OUTPUT_RULES = """
 6. 관련 근거가 없다면 {"quotes": []}를 반환하세요.
 7. quotes 외의 필드는 출력하지 마세요.
 8. 자유로운 답변이나 추가 설명을 작성하지 마세요.
+""".strip()
+
+logger = logging.getLogger(__name__)
+
+QUOTE_RETRY_RULES = """
+이전 출력이 원문 인용 검증을 통과하지 못했습니다.
+
+반드시 다음 조건을 지키세요.
+
+1. verified_context에 실제 존재하는 source_id만 사용하세요.
+2. 해당 source_id의 원문에서 6~320자를 정확히 복사하세요.
+3. 원문의 조사, 띄어쓰기, 문장부호를 수정하지 마세요.
+4. 질문과 관련된 근거가 있을 때만 인용하세요.
+5. JSON 객체 하나만 반환하세요.
+6. 최상위 필드는 quotes 하나만 사용하세요.
+7. 근거를 찾을 수 없다면 {"quotes": []}를 반환하세요.
+
+정확히 복사할 수 없는 문장은 인용하지 마세요.
 """.strip()
 
 
@@ -218,26 +237,94 @@ def _verify_quotes(
     return tuple(verified)
 
 
+def _quote_failure_reason(
+    raw_output: str,
+    context: AuthorizedMultisourceContext,
+) -> str:
+    """LLM 인용 검증 실패 원인을 텍스트 노출 없이 분류한다."""
+
+    if not isinstance(raw_output, str):
+        return "INVALID_OUTPUT_TYPE"
+
+    if len(raw_output) > MAX_OUTPUT_LENGTH:
+        return "OUTPUT_TOO_LONG"
+
+    try:
+        data = json.loads(
+            raw_output,
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
+    except (ValueError, TypeError):
+        return "INVALID_JSON"
+
+    if not isinstance(data, dict) or set(data) != {"quotes"}:
+        return "INVALID_JSON_SCHEMA"
+
+    quotes = data["quotes"]
+
+    if not isinstance(quotes, list):
+        return "INVALID_QUOTES_TYPE"
+
+    if not quotes:
+        return "EMPTY_QUOTES"
+
+    if len(quotes) > MAX_QUOTES:
+        return "TOO_MANY_QUOTES"
+
+    allowed = {}
+
+    for item in context.items:
+        allowed.setdefault(
+            item.source_id,
+            [],
+        ).append(item.content)
+
+    seen = set()
+
+    for entry in quotes:
+        if not isinstance(entry, dict):
+            return "INVALID_QUOTE_ENTRY"
+
+        if set(entry) != {"source_id", "quote"}:
+            return "INVALID_QUOTE_FIELDS"
+
+        source_id = entry["source_id"]
+        quote = entry["quote"]
+
+        if not isinstance(source_id, str):
+            return "INVALID_SOURCE_ID"
+
+        if not isinstance(quote, str):
+            return "INVALID_QUOTE_TYPE"
+
+        quote = quote.strip()
+
+        if source_id not in allowed:
+            return "UNAUTHORIZED_SOURCE"
+
+        if not MIN_QUOTE_LENGTH <= len(quote) <= MAX_QUOTE_LENGTH:
+            return "INVALID_QUOTE_LENGTH"
+
+        if not any(quote in content for content in allowed[source_id]):
+            return "QUOTE_NOT_IN_SOURCE"
+
+        key = (source_id, quote)
+
+        if key in seen:
+            return "DUPLICATE_QUOTE"
+
+        seen.add(key)
+
+    return "UNKNOWN_VALIDATION_FAILURE"
+
+
 def run_grounded_npc_response(
     plan: NPCReplyPlan,
     authorized_context: AuthorizedMultisourceContext,
     *,
     generate: Callable[[list[dict[str, str]]], str],
 ) -> NPCGroundedReply:
-    """검증된 근거에서 LLM이 선택한 인용문으로 NPC 응답을 만든다.
-
-    동작:
-        1. NPC 응답 계획 검증
-        2. 승인된 컨텍스트 일치 확인
-        3. LLM에 JSON 인용문 선택 요청
-        4. 출처 ID 검증
-        5. 원문 인용문 검증
-        6. 서버가 최종 응답 생성
-
-    보안:
-        LLM이 만든 자유로운 답변은 그대로 반환하지 않는다.
-        검증된 원문 인용문만 최종 응답에 포함한다.
-    """
+    """LLM 인용 검증 및 최대 1회 재시도."""
 
     if not isinstance(plan, NPCReplyPlan):
         raise TypeError("NPCReplyPlan이 필요합니다.")
@@ -251,46 +338,64 @@ def run_grounded_npc_response(
     if not callable(generate):
         raise TypeError("LLM 생성 함수가 필요합니다.")
 
-    # --------------------------------------------------
-    # 1. 근거 없는 응답 차단
-    # --------------------------------------------------
-
+    # 1. LLM 입력과 접근 승인 근거 일치 검사
     if not _is_plan_bound_to_context(
         plan,
         authorized_context,
     ):
+        logger.warning("NPC 답변 차단: PLAN_CONTEXT_MISMATCH")
         return _fallback()
 
-    # --------------------------------------------------
-    # 2. LLM 입력 구성
-    # --------------------------------------------------
-
+    # 2. 기존 시스템 프롬프트 및 인용 규칙 유지
     messages = [dict(message) for message in plan.messages]
 
     messages[0]["content"] += "\n\n" + QUOTE_OUTPUT_RULES
 
-    # --------------------------------------------------
-    # 3. LLM 호출
-    # --------------------------------------------------
-
+    # 3. 첫 번째 Ollama 호출
     raw_output = generate(messages)
-
-    # --------------------------------------------------
-    # 4. 생성 결과 검증
-    # --------------------------------------------------
 
     verified = _verify_quotes(
         raw_output,
         authorized_context,
     )
 
+    # 4. 검증 실패 시 원인 기록 및 1회 재시도
     if not verified:
-        return _fallback()
+        reason = _quote_failure_reason(
+            raw_output,
+            authorized_context,
+        )
 
-    # --------------------------------------------------
-    # 5. 서버가 검증된 인용문만 출력
-    # --------------------------------------------------
+        logger.warning(
+            "NPC 인용 검증 실패: %s / 재시도 1회",
+            reason,
+        )
 
+        retry_messages = [dict(message) for message in messages]
+
+        retry_messages[0]["content"] += "\n\n" + QUOTE_RETRY_RULES
+
+        raw_output = generate(retry_messages)
+
+        verified = _verify_quotes(
+            raw_output,
+            authorized_context,
+        )
+
+        if not verified:
+            reason = _quote_failure_reason(
+                raw_output,
+                authorized_context,
+            )
+
+            logger.warning(
+                "NPC 인용 재검증 실패: %s",
+                reason,
+            )
+
+            return _fallback()
+
+    # 5. 서버가 검증한 인용문만 최종 응답으로 구성
     lines = [
         "제가 확인한 자료에는 이렇게 나와 있어요.",
     ]
@@ -302,6 +407,11 @@ def run_grounded_npc_response(
 
         if source_id not in source_ids:
             source_ids.append(source_id)
+
+    logger.info(
+        "NPC 근거 검증 성공: 출처 %d개",
+        len(source_ids),
+    )
 
     return NPCGroundedReply(
         text="\n".join(lines),

@@ -156,6 +156,7 @@ def run_case001_npc_dialogue(
         session_store=session_store,
         resources=resources,
         matched_topics=event.matched_topics,
+        evidence_just_presented=event.presentation_created,
     )
 
     # NPC가 실제 인용한 지식 카드만 공개 완료 처리한다.

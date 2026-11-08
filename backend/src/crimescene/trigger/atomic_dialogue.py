@@ -13,6 +13,7 @@ from crimescene.chat.npc_session import (
     NPCSessionStore,
 )
 from crimescene.chat.npc_session_repository import SQLiteNPCSessionRepository
+from crimescene.chat.npc_social_dialogue import is_approved_social_reply
 from crimescene.retriever.npc_output_guard import NPCGroundedReply
 from crimescene.retriever.npc_response_gate import FALLBACK_REPLY
 from crimescene.scenario.schemas.access_policy import AccessPolicy
@@ -201,8 +202,17 @@ class SQLiteCase001Repository(SQLiteNPCSessionRepository):
         if reply.grounded and not reply.source_ids:
             raise ValueError("검증된 응답에는 출처가 필요합니다.")
 
-        if not reply.grounded and (reply.text != FALLBACK_REPLY or reply.source_ids):
-            raise ValueError("검증되지 않은 응답은 저장할 수 없습니다.")
+        if not reply.grounded:
+            is_safe_social = is_approved_social_reply(
+                turn.character_id,
+                exchange.user_message,
+                reply.text,
+            )
+
+            if reply.source_ids or (
+                reply.text != FALLBACK_REPLY and not is_safe_social
+            ):
+                raise ValueError("검증되지 않은 NPC 응답은 저장할 수 없습니다.")
 
         # 일반 대화도 revision을 증가시켜 경쟁 요청을 차단한다.
         committed_state = updated_state.model_copy(

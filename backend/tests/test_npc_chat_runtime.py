@@ -160,6 +160,13 @@ def test_verified_reply_saved(environment):
 
     generate.assert_called_once()
 
+    assert result.display_text == QUOTE
+    assert result.reply.source_ids == (SOURCE_ID,)
+    assert "(근거:" not in result.display_text
+
+    # 저장된 원본은 기존 검증 형식을 유지합니다.
+    assert "근거:" in result.exchange.npc_message
+
 
 def test_unverified_quote_returns_fallback(environment):
     state, store, _ = environment

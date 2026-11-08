@@ -21,6 +21,9 @@ from threading import RLock
 from typing import Protocol
 
 from crimescene.chat.npc_persona import EXPECTED_CHARACTER_IDS
+from crimescene.chat.npc_social_dialogue import (
+    is_approved_social_reply,
+)
 from crimescene.retriever.npc_output_guard import NPCGroundedReply
 from crimescene.retriever.npc_response_gate import FALLBACK_REPLY
 from crimescene.scenario.schemas.game_state import GameState
@@ -382,7 +385,14 @@ class NPCSessionStore:
             if not source_ids:
                 raise ValueError("근거 검증 응답에는 출처가 필요합니다.")
 
-        elif answer != FALLBACK_REPLY or source_ids:
+        elif source_ids or (
+            answer != FALLBACK_REPLY
+            and not is_approved_social_reply(
+                character_id,
+                question,
+                answer,
+            )
+        ):
             raise ValueError("검증되지 않은 NPC 응답은 저장할 수 없습니다.")
 
         exchange = NPCExchange(

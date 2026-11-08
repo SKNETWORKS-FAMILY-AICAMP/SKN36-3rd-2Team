@@ -140,10 +140,12 @@ def test_verified_reply_unlocks_only_quoted_card(monkeypatch):
         session_store,
         resources,
         matched_topics,
+        evidence_just_presented,
     ):
         assert state.presented == {"C01": ["E05"]}
         assert state.flags == ["AUDIT_OPEN"]
         assert matched_topics == ("audit",)
+        assert evidence_just_presented is True
 
         return NPCChatTurn(
             character_id="C01",
@@ -198,7 +200,11 @@ def test_unverified_reply_cannot_unlock_card(monkeypatch):
         session_store,
         resources,
         matched_topics,
+        evidence_just_presented,
     ):
+        assert evidence_just_presented is True
+
+        # 아래 기존 return NPCChatTurn(...) 코드는 그대로 유지
         return NPCChatTurn(
             character_id="C01",
             reply=NPCGroundedReply(
@@ -245,7 +251,11 @@ def test_unapproved_reply_source_cannot_unlock_card(monkeypatch):
         session_store,
         resources,
         matched_topics,
+        evidence_just_presented,
     ):
+        assert evidence_just_presented is True
+
+        # 아래 기존 return NPCChatTurn(...) 코드는 그대로 유지
         return NPCChatTurn(
             character_id="C01",
             reply=NPCGroundedReply(

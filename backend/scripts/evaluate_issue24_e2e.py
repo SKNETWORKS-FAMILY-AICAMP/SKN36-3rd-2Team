@@ -618,7 +618,23 @@ def run(
             print(f"[INFO] 이전 답변:\n{before.turn.reply.text}")
 
             print(f"[INFO] 이후 답변:\n{after.turn.reply.text}")
+            # Issue #25 - 자연스러운 NPC 말풍선 검증
+            print(f"\n[NPC] 증거 제시 전:\n{before.turn.display_text}")
+            print(f"\n[NPC] 증거 제시 후:\n{after.turn.display_text}")
 
+            if not after.turn.display_text.strip():
+                raise AssertionError("NPC 말풍선이 비어 있습니다.")
+
+            if after.turn.display_text == after.turn.reply.text:
+                raise AssertionError("NPC 자연화 출력이 적용되지 않았습니다.")
+
+            if any(
+                source_id in after.turn.display_text
+                for source_id in after.turn.reply.source_ids
+            ):
+                raise AssertionError("NPC 말풍선에 내부 출처 ID가 노출됐습니다.")
+
+            print("[PASS] Issue #25 자연스러운 NPC 말풍선 검증")
             # ------------------------------------------
             # 13. 비인가 정보 공개 검사
             # ------------------------------------------

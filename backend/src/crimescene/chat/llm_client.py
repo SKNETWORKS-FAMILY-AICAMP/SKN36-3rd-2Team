@@ -47,6 +47,50 @@ def generate_response(
     return response.message.content or ""
 
 
+def generate_npc_json(
+    messages: list[dict[str, str]],
+) -> str:
+    """검증된 NPC 응답 계획으로 JSON 인용 결과를 생성한다."""
+
+    if not isinstance(messages, list):
+        raise TypeError("LLM 메시지는 리스트여야 합니다.")
+
+    if len(messages) != 2:
+        raise ValueError("시스템 메시지와 사용자 메시지가 필요합니다.")
+
+    if any(not isinstance(message, dict) for message in messages):
+        raise TypeError("LLM 메시지 항목은 딕셔너리여야 합니다.")
+
+    if [message.get("role") for message in messages] != [
+        "system",
+        "user",
+    ]:
+        raise ValueError("LLM 메시지 역할이 올바르지 않습니다.")
+
+    if any(
+        not isinstance(message.get("content"), str) or not message["content"].strip()
+        for message in messages
+    ):
+        raise ValueError("LLM 메시지 내용이 비어 있거나 잘못됐습니다.")
+
+    if not settings.ollama_model:
+        raise ValueError("OLLAMA_MODEL 환경변수를 설정해 주세요.")
+
+    client = Client(host=settings.ollama_base_url)
+
+    response = client.chat(
+        model=settings.ollama_model,
+        messages=messages,
+        think=False,
+        format="json",
+        options={
+            "temperature": 0.1,
+        },
+    )
+
+    return response.message.content or ""
+
+
 if __name__ == "__main__":
     system_prompt = """
     당신은 AI 추리 게임의 사건 조사관입니다.

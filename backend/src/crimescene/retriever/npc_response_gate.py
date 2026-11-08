@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from crimescene.ingest.hybrid_chunker import HybridChunkRecord
 from crimescene.retriever.authorized_multisource_context import (
+    AuthorizedMultisourceContext,
     build_authorized_multisource_context,
 )
 from crimescene.retriever.graph_search import CHARACTER_IDS
@@ -219,4 +220,18 @@ def prepare_npc_reply(
             user_message,
         ),
         source_ids=tuple(item.source_id for item in authorized.items),
+        authorized_context=authorized,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class NPCReplyPlan:
+    """NPC LLM 호출 여부와 검증된 입력 데이터."""
+
+    can_call_llm: bool
+    fallback_reply: str | None
+    messages: tuple[dict[str, str], ...]
+    source_ids: tuple[str, ...]
+
+    # 최종 접근 검증을 통과한 서버 내부 근거
+    authorized_context: AuthorizedMultisourceContext | None = None

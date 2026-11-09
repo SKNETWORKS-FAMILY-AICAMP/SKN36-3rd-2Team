@@ -23,6 +23,7 @@ from crimescene.trigger.case001_dialogue import (
     Case001DialogueResult,
     run_case001_npc_dialogue,
 )
+from crimescene.trigger.dialogue_lock import exclusive_per_session
 from crimescene.trigger.npc_trigger import NPCTriggerRule
 
 
@@ -584,6 +585,7 @@ class _StagedSessionRepository:
         raise RuntimeError("대화 처리 중 세션 삭제는 허용하지 않습니다.")
 
 
+@exclusive_per_session
 def run_case001_npc_dialogue_atomic(
     question: str,
     *,

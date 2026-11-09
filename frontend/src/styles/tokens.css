@@ -1,0 +1,48 @@
+:root {
+  /* 색상: 먹색 / 낡은 종이 / 황동 / 바랜 적색 / 로그 청록 */
+  --ink-950: #0a0908;
+  --ink-900: #0e0d0c;
+  --ink-800: #161412;
+  --ink-700: #211e1b;
+  --ink-600: #2e2a26;
+  --ash-500: #4a443d;
+  --paper-100: #ece1c8;
+  --paper-200: #d9cbb0;
+  --paper-300: #b9ab91;
+  --paper-400: #8d8269;
+  --brass-400: #c9a45f;
+  --brass-500: #b08d4f;
+  --brass-700: #6e5730;
+  --blood-500: #8c2a2a;
+  --blood-400: #a63a3a;
+  --teal-500: #4a8f8a;
+
+  /* 글꼴: 서사 명조 / UI 고딕 / 기록 고정폭 */
+  --font-serif: 'Noto Serif KR', 'Nanum Myeongjo', serif;
+  --font-sans: 'Noto Sans KR', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'Nanum Gothic Coding', 'D2Coding', ui-monospace, monospace;
+
+  /* 타입 스케일 (제목·부제·본문·보조·캡션) */
+  --fs-title: 28px;
+  --fs-h2: 17px;
+  --fs-body: 15px;
+  --fs-small: 13px;
+  --fs-cap: 12px;
+  --track-title: .08em;
+  --track-label: .06em;
+
+  /* 간격 (4px 단위) */
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px;
+
+  /* 선 · 버튼 · 패널 */
+  --line: 1px solid var(--ink-600);
+  --line-brass: 1px solid var(--brass-700);
+  --btn-h: 40px;
+  --btn-h-sm: 30px;
+
+  /* 모든 조사 화면이 공유하는 배경 */
+  --page-bg: radial-gradient(ellipse at 50% 0%, #1f1812, var(--ink-900) 66%);
+
+  --shadow-deep: 0 24px 60px rgba(0, 0, 0, 0.65);
+  --ease-soft: cubic-bezier(0.22, 0.61, 0.36, 1);
+}

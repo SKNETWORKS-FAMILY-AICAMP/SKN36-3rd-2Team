@@ -1,0 +1,6 @@
+.scene { position: absolute; inset: 0; width: 100%; height: 100%; }
+.drop { animation: fall 1.6s linear infinite; }
+@keyframes fall { from { transform: translateY(0); opacity: .6; } to { transform: translateY(300px); opacity: 0; } }
+.dust { animation: float 7s ease-in-out infinite; }
+@keyframes float { 50% { transform: translate(14px, -22px); opacity: .15; } }
+@media (prefers-reduced-motion: reduce) { .drop, .dust { animation: none; } }

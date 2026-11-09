@@ -157,8 +157,13 @@ def _load_acquisition_policies(
 @contextmanager
 def load_chat_runtime() -> Iterator[ChatRuntime]:
     """CASE-001 원본·Qdrant·Neo4j·Ollama를 연결하고 종료 시 정리합니다."""
-    if not settings.ollama_model:
+    if settings.llm_provider == "ollama" and not settings.ollama_model:
         raise ValueError("backend/.env 또는 환경변수에 OLLAMA_MODEL을 설정하세요.")
+    if (
+        settings.llm_provider == "openai"
+        and not settings.openai_api_key.get_secret_value().strip()
+    ):
+        raise ValueError("backend/.env 또는 환경변수에 OPENAI_API_KEY를 설정하세요.")
 
     root = (
         Path(os.getenv("CRIMESCENE_CASE001_ROOT", str(DEFAULT_DATA_ROOT)))
@@ -234,7 +239,8 @@ def load_chat_runtime() -> Iterator[ChatRuntime]:
 
         ollama = OllamaClient(host=settings.ollama_base_url, timeout=120)
         # 모델이 없으면 첫 번째 사용자 요청이 아니라 서버 시작 단계에서 실패합니다.
-        ollama.show(settings.ollama_model)
+        if settings.llm_provider == "ollama":
+            ollama.show(settings.ollama_model)
         ollama.show("bge-m3")
 
         if not qdrant.collection_exists(COLLECTION_NAME):

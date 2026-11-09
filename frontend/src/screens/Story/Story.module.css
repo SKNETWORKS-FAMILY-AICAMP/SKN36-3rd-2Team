@@ -1,0 +1,28 @@
+.page { position: relative; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+.dim { position: absolute; inset: 0; background: rgba(5,6,8,.35); pointer-events: none; }
+.page > header { position: relative; z-index: 2; background: rgba(10,9,8,.7); backdrop-filter: blur(4px); }
+.main { position: relative; z-index: 1; flex: 1; display: flex; align-items: flex-end; justify-content: center; padding: 24px 32px 40px; }
+.box { width: min(960px, 100%); padding: 24px 32px 22px; background: rgba(10,9,8,.86); border: 1px solid var(--brass-700); box-shadow: var(--shadow-deep); }
+div[role=button].box { cursor: pointer; }
+.place { font-family: var(--font-mono); font-size: 14px; letter-spacing: .12em; color: var(--brass-400); }
+.line { font-family: var(--font-serif); font-size: 20px; line-height: 1.8; color: var(--paper-100); word-break: keep-all; }
+.more { display: block; margin-top: 12px; text-align: right; font-size: 14px; color: var(--paper-300); animation: nudge 1.6s infinite; }
+.skipBtn { display: block; margin: 8px 0 0 auto; padding: 4px 0; background: none; border: 0; cursor: pointer; font-size: 13px; color: var(--paper-300); text-decoration: underline; text-underline-offset: 3px; }
+.skipBtn:hover { color: var(--brass-400); }
+@keyframes nudge { 50% { opacity: .4; } }
+.places { display: flex; flex-wrap: wrap; gap: 10px; margin: 14px 0 16px; }
+.pl { padding: 10px 16px; font-size: 15px; color: var(--paper-200); background: var(--ink-800); border: 1px solid var(--ink-600); cursor: pointer; }
+.pl:hover { border-color: var(--brass-500); }
+.cur { border-color: var(--brass-400); color: var(--brass-400); background: rgba(176,141,79,.12); }
+.pl small { color: var(--brass-400); }
+.obs { min-height: 64px; font-family: var(--font-serif); font-size: 18px; line-height: 1.8; color: var(--paper-100); word-break: keep-all; }
+.actions { display: flex; justify-content: flex-end; margin-top: 10px; }
+.go { padding: 12px 22px; font-size: 15px; background: var(--brass-500); color: var(--ink-950); border: 0; cursor: pointer; }
+.go:hover { background: var(--brass-400); }
+@media (max-width: 900px) { .main { padding: 14px 14px 22px; } .box { padding: 18px; } .line, .obs { font-size: 16px; } }
+
+.count { margin-left: 12px; color: var(--paper-400); letter-spacing: 0; font-family: var(--font-sans); }
+.new { display: inline-block; width: 7px; height: 7px; margin-left: 8px; border-radius: 50%; background: var(--blood-400); vertical-align: middle; animation: nudge 1.6s infinite; }
+.left { margin-right: auto; align-self: center; font-size: 13px; color: var(--paper-400); }
+
+.bg { position: absolute; inset: 0; }

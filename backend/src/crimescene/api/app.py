@@ -11,6 +11,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from neo4j.exceptions import Neo4jError, ServiceUnavailable, SessionExpired
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from crimescene.chat.llm_client import LLMProviderError
+from crimescene.chat.npc_history_display import render_stored_npc_message
 from crimescene.chat.npc_persona import EXPECTED_CHARACTER_IDS
 from crimescene.chat.npc_rag_service import NPCRAGResources
 from crimescene.chat.npc_session import MAX_MESSAGE_LENGTH
@@ -34,6 +36,8 @@ from crimescene.trigger.atomic_dialogue import (
     SQLiteCase001Repository,
     run_case001_npc_dialogue_atomic,
 )
+from crimescene.trigger.case001_dialogue import build_case001_recipients
+from crimescene.trigger.evidence_reaction import resolve_evidence_reaction
 from crimescene.trigger.npc_trigger import NPCTriggerRule
 
 # ============================================================
@@ -154,6 +158,25 @@ class EvidenceListResponse(BaseModel):
     items: list[EvidenceItemResponse]
     collectedCount: int
     totalCount: int
+
+
+class EvidenceAvailableItemResponse(BaseModel):
+    evidenceId: str
+    name: str
+    score: int
+
+
+class EvidenceAvailableResponse(BaseModel):
+    items: list[EvidenceAvailableItemResponse]
+
+
+class EvidenceDetailResponse(BaseModel):
+    id: str
+    title: str
+    body: str | None
+    holderId: str
+    acquiredBy: str | None
+    confirmedRelations: list[dict[str, str]]
 
 
 class ProgressResponse(BaseModel):
@@ -688,7 +711,10 @@ def create_app(
             messages=[
                 ChatMessageResponse(
                     userMessage=exchange.user_message,
-                    displayText=exchange.npc_message,
+                    displayText=render_stored_npc_message(
+                        exchange.npc_message,
+                        exchange.source_ids,
+                    ),
                 )
                 for exchange in history
             ],
@@ -762,15 +788,41 @@ def create_app(
                 detail="NPC 대화 엔진이 준비되지 않았습니다.",
             )
 
+        # ISSUE65_EVIDENCE_REACTION_V1
+        # A collected evidence item can be shown to any unlocked NPC.
+        # Only explicitly authorized pairs may create presentation triggers.
+        question = body.question
+        permitted_evidence_id = body.presentedEvidenceId
+        if permitted_evidence_id is not None:
+            recipients = build_case001_recipients(
+                policies=dict(live_policies),
+                npc_cards=live_resources.npc_cards,
+                evidence_rules=live_resources.evidence_rules,
+            )
+            try:
+                question, permitted_evidence_id = resolve_evidence_reaction(
+                    question,
+                    permitted_evidence_id,
+                    active_npc=selection[0],
+                    rules=live_resources.evidence_rules,
+                    authorized_recipients=recipients,
+                    max_length=MAX_MESSAGE_LENGTH,
+                )
+            except ValueError:
+                raise HTTPException(
+                    status_code=422,
+                    detail="증거 데이터가 올바르지 않습니다.",
+                ) from None
+
         try:
             result = run_case001_npc_dialogue_atomic(
-                body.question,
+                question,
                 session_id=session_id,
                 repository=repository,
                 resources=live_resources,
                 policies=dict(live_policies),
                 trigger_rules=live_triggers,
-                presented_evidence_id=body.presentedEvidenceId,
+                presented_evidence_id=permitted_evidence_id,
                 flag_config=live_flags,
             )
 
@@ -779,6 +831,9 @@ def create_app(
                 status_code=403,
                 detail="현재 NPC 대화 또는 증거 제시가 허용되지 않습니다.",
             ) from None
+
+        except LLMProviderError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from None
 
         except ValueError:
             raise HTTPException(
@@ -976,6 +1031,88 @@ def create_app(
         )
 
     # ========================================================
+    # ISSUE65_EVIDENCE_AVAILABLE_V1: only policy-eligible evidence is advertised.
+    @app.get(
+        "/api/games/{session_id}/evidence/available",
+        response_model=EvidenceAvailableResponse,
+    )
+    def get_available_evidence(
+        session_id: str,
+        request: Request,
+        case001_owner: str | None = Cookie(default=None),
+    ) -> EvidenceAvailableResponse:
+        state = load_owned_request(session_id, request, case001_owner)
+        if state.phase != GamePhase.INVESTIGATION or state.outcome not in (
+            None,
+            "ONGOING",
+        ):
+            return EvidenceAvailableResponse(items=[])
+
+        selection = repository.load_selection(session_id)
+        if selection is None or selection[1] != state.revision:
+            raise HTTPException(status_code=409, detail="NPC 선택 상태가 변경됐습니다.")
+        active_npc = selection[0]
+        if active_npc not in state.unlocked_characters:
+            raise HTTPException(status_code=403, detail="해금되지 않은 NPC입니다.")
+
+        resources = getattr(request.app.state, "dialogue_resources", dialogue_resources)
+        policy_ids = getattr(request.app.state, "acquisition_policy_ids", None)
+        evaluator = getattr(request.app.state, "acquisition_evaluator", None)
+        if resources is None or not policy_ids or evaluator is None:
+            raise HTTPException(
+                status_code=503, detail="증거 수집 엔진이 준비되지 않았습니다."
+            )
+
+        items = []
+        for evidence_id, policy_id in sorted(policy_ids.items()):
+            rule = resources.evidence_rules.get(evidence_id)
+            if (
+                rule is None
+                or rule.holder != active_npc
+                or evidence_id in state.evidence
+                or not evaluator.is_allowed(
+                    policy_id, state, active_character_id=active_npc
+                )
+            ):
+                continue
+            # Only display evidence after the independent acquisition policy passes.
+            items.append(
+                EvidenceAvailableItemResponse(
+                    evidenceId=evidence_id, name=rule.name, score=rule.score
+                )
+            )
+        return EvidenceAvailableResponse(items=items)
+
+    @app.get(
+        "/api/games/{session_id}/evidence/{evidence_id}",
+        response_model=EvidenceDetailResponse,
+    )
+    def get_collected_evidence_detail(
+        session_id: str,
+        evidence_id: str,
+        request: Request,
+        case001_owner: str | None = Cookie(default=None),
+    ) -> EvidenceDetailResponse:
+        state = load_owned_request(session_id, request, case001_owner)
+        evidence_state = state.evidence.get(evidence_id)
+        # 404 for unrevealed items: do not expose their existence or metadata.
+        if evidence_state is None or evidence_state.stage not in {"found", "resolved"}:
+            raise HTTPException(status_code=404, detail="증거를 찾을 수 없습니다.")
+        rule = get_evidence_rules(request).get(evidence_id)
+        if rule is None:
+            raise HTTPException(
+                status_code=409, detail="증거 데이터가 일치하지 않습니다."
+            )
+        # No fabricated document text/acquisition method: original body API is pending.
+        return EvidenceDetailResponse(
+            id=evidence_id,
+            title=rule.name,
+            body=None,
+            holderId=rule.holder,
+            acquiredBy=None,
+            confirmedRelations=[],
+        )
+
     # API: 게임 진행률 조회
     # ========================================================
 

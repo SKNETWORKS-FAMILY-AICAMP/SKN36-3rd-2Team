@@ -52,13 +52,17 @@ def test_saved_chat_history(tmp_path):
         state = repository.load_state(session_id)
         store = NPCSessionStore(repository=repository)
 
-        # 서버에서 검증한 NPC 응답을 저장하는 테스트입니다.
+        quote = "그날 밤 복도에서 발소리가 들렸습니다."
+
         store.append_verified_exchange(
             state,
             "C01",
             user_message="안녕하세요?",
             reply=NPCGroundedReply(
-                text="무슨 일이십니까?",
+                text=(
+                    "제가 확인한 자료에는 이렇게 나와 있어요.\n"
+                    f"“{quote}” (근거: TEST-SOURCE-01)"
+                ),
                 source_ids=("TEST-SOURCE-01",),
                 grounded=True,
             ),
@@ -73,11 +77,11 @@ def test_saved_chat_history(tmp_path):
         assert data["messages"] == [
             {
                 "userMessage": "안녕하세요?",
-                "displayText": "무슨 일이십니까?",
+                "displayText": quote,
             }
         ]
 
-        # 내부 검색 출처는 응답에 포함하지 않습니다.
+        # 내부 출처 정보는 사용자에게 노출하지 않습니다.
         assert "TEST-SOURCE-01" not in response.text
 
 

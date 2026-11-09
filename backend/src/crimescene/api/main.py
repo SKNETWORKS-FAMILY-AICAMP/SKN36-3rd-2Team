@@ -9,6 +9,7 @@ from fastapi import FastAPI
 
 from crimescene.api.app import create_app
 from crimescene.api.chat_bootstrap import load_chat_runtime
+from crimescene.scenario.loaders.case_truth_loader import load_case001_truth
 from crimescene.trigger.atomic_dialogue import SQLiteCase001Repository
 
 
@@ -66,3 +67,9 @@ app = create_app(
     == "true",
     lifespan=chat_lifespan,
 )
+
+# 범인 정답은 서버 로컬 파일에서만 읽습니다.
+truth_path = os.getenv("CRIMESCENE_CASE_TRUTH_PATH", "").strip()
+
+if truth_path:
+    app.state.case_truth = load_case001_truth(Path(truth_path).expanduser().resolve())

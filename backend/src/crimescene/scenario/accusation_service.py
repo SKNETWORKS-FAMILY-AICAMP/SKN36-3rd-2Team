@@ -6,12 +6,13 @@ from dataclasses import replace
 from crimescene.scenario.accusation import (
     AccusationResult,
     AccusationStatus,
+    can_accuse,
     enter_accusation,
     submit_accusation,
 )
 from crimescene.scenario.case_truth import CaseTruth
 from crimescene.scenario.schemas.evidence import EvidenceRule
-from crimescene.scenario.schemas.game_state import GameState
+from crimescene.scenario.schemas.game_state import GamePhase, GameState
 from crimescene.trigger.atomic_dialogue import SQLiteCase001Repository
 
 
@@ -75,6 +76,79 @@ def submit_accusation_atomic(
     committed = repository.commit_state(
         expected_state=original,
         updated_state=result.state,
+    )
+
+    return replace(
+        result,
+        state=committed,
+        attempts_left=committed.attempts_left,
+    )
+
+
+def submit_accusation_request_atomic(
+    *,
+    session_id: str,
+    suspect_id: str,
+    expected_revision: int,
+    repository: SQLiteCase001Repository,
+    truth: CaseTruth,
+    evidence_rules: Mapping[str, EvidenceRule],
+) -> AccusationResult:
+    """지목 단계 전환과 판정을 SQLite 트랜잭션 하나로 저장합니다."""
+
+    if not isinstance(repository, SQLiteCase001Repository):
+        raise TypeError("올바른 SQLite 저장소가 필요합니다.")
+
+    if (
+        isinstance(expected_revision, bool)
+        or not isinstance(expected_revision, int)
+        or expected_revision < 0
+    ):
+        raise ValueError("올바르지 않은 revision입니다.")
+
+    original = repository.load_state(session_id)
+
+    # 동시 요청 및 이전 상태를 사용하는 중복 요청 차단
+    if original.revision != expected_revision:
+        raise ValueError("게임 상태가 변경되었습니다.")
+
+    if original.phase not in (
+        GamePhase.INVESTIGATION,
+        GamePhase.ACCUSATION,
+    ) or original.outcome not in (None, "ONGOING"):
+        raise PermissionError("현재 범인을 지목할 수 없습니다.")
+
+    # 증거 부족 시 상태와 지목 기회를 변경하지 않습니다.
+    if not can_accuse(original, evidence_rules):
+        return AccusationResult(
+            state=original,
+            status=AccusationStatus.NOT_ENOUGH_EVIDENCE,
+            attempts_left=original.attempts_left,
+        )
+
+    # 단계 전환은 메모리에서만 수행합니다.
+    # 중간 GameState를 DB에 저장하지 않습니다.
+    accusation_state = enter_accusation(original, evidence_rules)
+
+    result = submit_accusation(
+        state=accusation_state,
+        suspect_id=suspect_id,
+        truth=truth,
+        evidence_rules=evidence_rules,
+    )
+
+    # 단계 전환과 판정을 하나의 상태 변경으로 합칩니다.
+    updated = GameState.model_validate(
+        {
+            **result.state.model_dump(mode="python"),
+            "revision": original.revision + 1,
+        }
+    )
+
+    # 원래 revision이 유지된 경우에만 원자적으로 저장됩니다.
+    committed = repository.commit_state(
+        expected_state=original,
+        updated_state=updated,
     )
 
     return replace(

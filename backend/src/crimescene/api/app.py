@@ -8,11 +8,19 @@ from contextlib import AbstractAsyncContextManager
 
 from fastapi import Cookie, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from neo4j.exceptions import Neo4jError, ServiceUnavailable, SessionExpired
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from crimescene.chat.npc_persona import EXPECTED_CHARACTER_IDS
 from crimescene.chat.npc_rag_service import NPCRAGResources
 from crimescene.chat.npc_session import MAX_MESSAGE_LENGTH
+from crimescene.retriever.graph_search import search_character_relations
+from crimescene.scenario.accusation import AccusationStatus, can_accuse
+from crimescene.scenario.accusation_service import (
+    submit_accusation_request_atomic,
+)
+from crimescene.scenario.case_truth import CaseTruth
+from crimescene.scenario.evidence_collection import get_collection_progress
 from crimescene.scenario.evidence_service import collect_evidence_atomic
 from crimescene.scenario.game_progress import (
     create_initial_state,
@@ -132,6 +140,74 @@ class EvidenceCollectResponse(BaseModel):
     collectedCount: int
     totalCount: int
     newlyUnlockedCharacters: list[str]
+    game: GameResponse
+
+
+class EvidenceItemResponse(BaseModel):
+    evidenceId: str
+    name: str
+    score: int
+    stage: str
+
+
+class EvidenceListResponse(BaseModel):
+    items: list[EvidenceItemResponse]
+    collectedCount: int
+    totalCount: int
+
+
+class ProgressResponse(BaseModel):
+    collection: CollectionResponse
+    collectedCount: int
+    totalCount: int
+    collectionRate: float
+    canAccuse: bool
+    attemptsLeft: int
+
+
+class RelationshipNodeResponse(BaseModel):
+    id: str
+    label: str
+
+
+class RelationshipEdgeResponse(BaseModel):
+    id: str
+    sourceId: str
+    targetId: str
+    relation: str
+
+
+class RelationshipResponse(BaseModel):
+    nodes: list[RelationshipNodeResponse]
+    edges: list[RelationshipEdgeResponse]
+
+
+class AccusationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    suspectId: str = Field(pattern=r"^C(?:0[1-9]|10)$")
+    expectedRevision: int = Field(ge=0)
+
+
+class AccusationResponse(BaseModel):
+    result: AccusationStatus
+    attemptsLeft: int
+    game: GameResponse
+
+
+class EndingTruthResponse(BaseModel):
+    perpetratorId: str
+    motive: str
+    causeOfDeath: str
+    crimeMethod: str
+
+
+class EndingResponse(BaseModel):
+    outcome: str
+    title: str
+    message: str
+    deepEligible: bool
+    truth: EndingTruthResponse | None
     game: GameResponse
 
 
@@ -831,6 +907,373 @@ def create_app(
             totalCount=result.progress.total_count,
             newlyUnlockedCharacters=list(result.unlocked_npcs),
             game=game_response(result.state, events=events),
+        )
+
+    def get_evidence_rules(request: Request):
+        """서버에서 검증된 증거 규칙만 사용합니다."""
+        resources = getattr(
+            request.app.state,
+            "dialogue_resources",
+            dialogue_resources,
+        )
+
+        if resources is None or not resources.evidence_rules:
+            raise HTTPException(
+                status_code=503,
+                detail="증거 데이터가 준비되지 않았습니다.",
+            )
+
+        return resources.evidence_rules
+
+    # ========================================================
+    # API: 증거 보관함 조회
+    # ========================================================
+
+    @app.get(
+        "/api/games/{session_id}/evidence",
+        response_model=EvidenceListResponse,
+    )
+    def get_evidence_list(
+        session_id: str,
+        request: Request,
+        case001_owner: str | None = Cookie(default=None),
+    ) -> EvidenceListResponse:
+
+        state = load_owned_request(
+            session_id,
+            request,
+            case001_owner,
+        )
+
+        rules = get_evidence_rules(request)
+
+        try:
+            progress = get_collection_progress(state, rules)
+
+            if state.score != progress.score:
+                raise ValueError("증거 점수가 일치하지 않습니다.")
+
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=409,
+                detail="증거 데이터의 무결성이 일치하지 않습니다.",
+            ) from None
+
+        items = [
+            EvidenceItemResponse(
+                evidenceId=evidence_id,
+                name=rules[evidence_id].name,
+                score=rules[evidence_id].score,
+                stage=evidence_state.stage,
+            )
+            for evidence_id, evidence_state in sorted(state.evidence.items())
+        ]
+
+        return EvidenceListResponse(
+            items=items,
+            collectedCount=progress.collected_count,
+            totalCount=progress.total_count,
+        )
+
+    # ========================================================
+    # API: 게임 진행률 조회
+    # ========================================================
+
+    @app.get(
+        "/api/games/{session_id}/progress",
+        response_model=ProgressResponse,
+    )
+    def get_game_progress(
+        session_id: str,
+        request: Request,
+        case001_owner: str | None = Cookie(default=None),
+    ) -> ProgressResponse:
+
+        state = load_owned_request(
+            session_id,
+            request,
+            case001_owner,
+        )
+
+        rules = get_evidence_rules(request)
+
+        try:
+            progress = get_collection_progress(state, rules)
+            accusation_allowed = can_accuse(state, rules)
+
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=409,
+                detail="게임 진행 데이터의 무결성이 일치하지 않습니다.",
+            ) from None
+
+        rate = (
+            progress.collected_count / progress.total_count * 100
+            if progress.total_count
+            else 0.0
+        )
+
+        return ProgressResponse(
+            collection=CollectionResponse(
+                score=progress.score,
+                total=progress.total,
+            ),
+            collectedCount=progress.collected_count,
+            totalCount=progress.total_count,
+            collectionRate=round(rate, 2),
+            canAccuse=accusation_allowed,
+            attemptsLeft=state.attempts_left,
+        )
+
+    @app.get(
+        "/api/games/{session_id}/relationships",
+        response_model=RelationshipResponse,
+    )
+    def get_relationships(
+        session_id: str,
+        request: Request,
+        case001_owner: str | None = Cookie(default=None),
+    ) -> RelationshipResponse:
+        """현재 플레이어에게 공개된 인물 관계만 반환합니다."""
+
+        state = load_owned_request(
+            session_id,
+            request,
+            case001_owner,
+        )
+
+        if state.phase == GamePhase.PROLOGUE:
+            raise HTTPException(
+                status_code=409,
+                detail="아직 조사가 시작되지 않았습니다.",
+            )
+
+        resources = getattr(
+            request.app.state,
+            "dialogue_resources",
+            dialogue_resources,
+        )
+
+        if resources is None:
+            raise HTTPException(
+                status_code=503,
+                detail="관계도 데이터가 준비되지 않았습니다.",
+            )
+
+        # 해금된 NPC와 공개 인물 V01만 표시합니다.
+        visible_ids = (set(state.unlocked_characters) & set(EXPECTED_CHARACTER_IDS)) | {
+            "V01"
+        }
+
+        labels = {
+            entity["entity_id"]: entity["label"]
+            for entity in resources.registry
+            if (
+                isinstance(entity, dict)
+                and entity.get("case_id") == state.case_id
+                and entity.get("entity_id") in visible_ids
+                and isinstance(entity.get("label"), str)
+            )
+        }
+
+        nodes = [
+            RelationshipNodeResponse(
+                id=entity_id,
+                label=labels.get(entity_id, entity_id),
+            )
+            for entity_id in sorted(visible_ids)
+        ]
+
+        edges: dict[str, RelationshipEdgeResponse] = {}
+
+        try:
+            for character_id in sorted(visible_ids & set(EXPECTED_CHARACTER_IDS)):
+                relations = search_character_relations(
+                    resources.neo4j_driver,
+                    character_id,
+                    state,
+                    resources.trusted_edges,
+                    top_k=100,
+                )
+
+                for relation in relations:
+                    # 관계의 양 끝이 공개된 인물인지 재확인합니다.
+                    if (
+                        relation.source_id not in visible_ids
+                        or relation.target_id not in visible_ids
+                    ):
+                        continue
+
+                    edges[relation.edge_id] = RelationshipEdgeResponse(
+                        id=relation.edge_id,
+                        sourceId=relation.source_id,
+                        targetId=relation.target_id,
+                        relation=relation.relation,
+                    )
+
+        except (Neo4jError, ServiceUnavailable, SessionExpired):
+            raise HTTPException(
+                status_code=503,
+                detail="관계도 조회 서비스에 연결할 수 없습니다.",
+            ) from None
+
+        return RelationshipResponse(
+            nodes=nodes,
+            edges=[edges[edge_id] for edge_id in sorted(edges)],
+        )
+
+    @app.post(
+        "/api/games/{session_id}/accusations",
+        response_model=AccusationResponse,
+    )
+    def accuse_suspect(
+        session_id: str,
+        body: AccusationRequest,
+        request: Request,
+        case001_owner: str | None = Cookie(default=None),
+    ) -> AccusationResponse:
+        """서버에서 지목 조건을 검증하고 결과를 저장합니다."""
+
+        state = load_owned_request(
+            session_id,
+            request,
+            case001_owner,
+        )
+
+        if body.expectedRevision != state.revision:
+            raise HTTPException(
+                status_code=409,
+                detail="게임 상태가 변경되었습니다.",
+            )
+
+        if state.phase not in (
+            GamePhase.INVESTIGATION,
+            GamePhase.ACCUSATION,
+        ) or state.outcome not in (None, "ONGOING"):
+            raise HTTPException(
+                status_code=409,
+                detail="현재 범인을 지목할 수 없습니다.",
+            )
+
+        rules = get_evidence_rules(request)
+
+        try:
+            allowed = can_accuse(state, rules)
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=409,
+                detail="게임 진행 데이터가 올바르지 않습니다.",
+            ) from None
+
+        # 증거가 부족하면 DB와 지목 기회를 변경하지 않습니다.
+        if not allowed:
+            return AccusationResponse(
+                result=AccusationStatus.NOT_ENOUGH_EVIDENCE,
+                attemptsLeft=state.attempts_left,
+                game=game_response(state),
+            )
+
+        # 실제 범인 정보는 서버 전용 데이터만 사용합니다.
+        truth = getattr(request.app.state, "case_truth", None)
+
+        if not isinstance(truth, CaseTruth):
+            raise HTTPException(
+                status_code=503,
+                detail="범인 판정 엔진이 준비되지 않았습니다.",
+            )
+
+        try:
+            result = submit_accusation_request_atomic(
+                session_id=session_id,
+                suspect_id=body.suspectId,
+                expected_revision=body.expectedRevision,
+                repository=repository,
+                truth=truth,
+                evidence_rules=rules,
+            )
+
+        except (PermissionError, ValueError):
+            raise HTTPException(
+                status_code=409,
+                detail="지목 처리 중 게임 상태가 변경되었습니다.",
+            ) from None
+
+        return AccusationResponse(
+            result=result.status,
+            attemptsLeft=result.attempts_left,
+            game=game_response(
+                result.state,
+                events=[{"type": "ACCUSATION_RESULT"}],
+            ),
+        )
+
+    # ========================================================
+    # API: 게임 엔딩 조회
+    # ========================================================
+
+    @app.get(
+        "/api/games/{session_id}/ending",
+        response_model=EndingResponse,
+    )
+    def get_ending(
+        session_id: str,
+        request: Request,
+        case001_owner: str | None = Cookie(default=None),
+    ) -> EndingResponse:
+        """게임이 종료된 경우에만 엔딩을 공개합니다."""
+
+        state = load_owned_request(
+            session_id,
+            request,
+            case001_owner,
+        )
+
+        # 게임 종료 전 엔딩 정보 접근 차단
+        if state.phase != GamePhase.FINISHED or state.outcome not in (
+            "SUCCESS",
+            "FAILURE",
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="게임이 종료된 후 엔딩을 확인할 수 있습니다.",
+            )
+
+        # 범인 지목 성공
+        if state.outcome == "SUCCESS":
+            truth = getattr(
+                request.app.state,
+                "case_truth",
+                None,
+            )
+
+            if not isinstance(truth, CaseTruth) or truth.case_id != state.case_id:
+                raise HTTPException(
+                    status_code=503,
+                    detail="엔딩 데이터를 불러올 수 없습니다.",
+                )
+
+            return EndingResponse(
+                outcome="SUCCESS",
+                title="사건 해결",
+                message="수집한 증거와 진술을 통해 사건의 진실을 밝혀냈습니다.",
+                deepEligible=state.deep_eligible,
+                truth=EndingTruthResponse(
+                    perpetratorId=truth.perpetrator_character_id,
+                    motive=truth.motive,
+                    causeOfDeath=truth.cause_of_death,
+                    crimeMethod=truth.crime_method,
+                ),
+                game=game_response(state),
+            )
+
+        # 범인 지목 실패
+        return EndingResponse(
+            outcome="FAILURE",
+            title="미해결 사건",
+            message="범인 지목 기회를 모두 사용했습니다. 사건은 미해결로 남았습니다.",
+            deepEligible=False,
+            truth=None,
+            game=game_response(state),
         )
 
     return app

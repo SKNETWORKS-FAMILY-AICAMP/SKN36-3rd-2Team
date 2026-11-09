@@ -1,4 +1,13 @@
+from enum import StrEnum
+
 from pydantic import BaseModel, ConfigDict, Field
+
+
+class GamePhase(StrEnum):
+    PROLOGUE = "PROLOGUE"
+    INVESTIGATION = "INVESTIGATION"
+    ACCUSATION = "ACCUSATION"
+    FINISHED = "FINISHED"
 
 
 class EvidenceState(BaseModel):
@@ -26,6 +35,10 @@ class GameState(BaseModel):
     # 사건 및 세션
     case_id: str = Field(min_length=1)
     session_id: str = Field(min_length=1)
+
+    # 게임 진행 단계
+    # 기본값을 제공해 기존 SQLite 게임 상태와의 호환성을 유지합니다.
+    phase: GamePhase = GamePhase.PROLOGUE
 
     # 해금된 NPC
     unlocked_characters: list[str]

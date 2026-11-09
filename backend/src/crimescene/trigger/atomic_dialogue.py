@@ -16,6 +16,7 @@ from crimescene.chat.npc_session_repository import SQLiteNPCSessionRepository
 from crimescene.chat.npc_social_dialogue import is_approved_social_reply
 from crimescene.retriever.npc_output_guard import NPCGroundedReply
 from crimescene.retriever.npc_response_gate import FALLBACK_REPLY
+from crimescene.scenario.loaders.unlock_graph_loader import Case001UnlockRules
 from crimescene.scenario.schemas.access_policy import AccessPolicy
 from crimescene.scenario.schemas.game_state import GameState
 from crimescene.trigger.case001_dialogue import (
@@ -503,6 +504,7 @@ def run_case001_npc_dialogue_atomic(
     policies: dict[str, AccessPolicy],
     trigger_rules: tuple[NPCTriggerRule, ...],
     presented_evidence_id: str | None = None,
+    flag_config: Case001UnlockRules | None = None,
 ) -> Case001DialogueResult:
     """DB에서 신뢰 상태를 읽고 NPC 대화와 GameState를 원자적으로 저장한다."""
 
@@ -517,6 +519,9 @@ def run_case001_npc_dialogue_atomic(
 
     store = NPCSessionStore(repository=staged)
 
+    # 기존 #24 테스트의 모킹 함수와 호환성을 유지합니다.
+    flag_options = {"flag_config": flag_config} if flag_config is not None else {}
+
     result = run_case001_npc_dialogue(
         question,
         state=state,
@@ -525,6 +530,7 @@ def run_case001_npc_dialogue_atomic(
         policies=policies,
         trigger_rules=trigger_rules,
         presented_evidence_id=presented_evidence_id,
+        **flag_options,
     )
 
     if staged.pending is None or staged.pending != result.turn.exchange:

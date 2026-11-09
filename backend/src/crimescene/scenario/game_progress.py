@@ -16,6 +16,22 @@ ALLOWED_TRANSITIONS = {
     GamePhase.FINISHED: set(),
 }
 
+EXPECTED_EVIDENCE_IDS = frozenset(f"E{i:02d}" for i in range(1, 11))
+VALID_EVIDENCE_STAGES = frozenset({"found", "resolved"})
+MIN_EVIDENCE_COUNT = 5
+
+
+def meets_accusation_requirements(state: GameState) -> bool:
+    """CASE-001 범인 지목 최소 조건을 검증합니다."""
+
+    collected_count = sum(
+        evidence_id in EXPECTED_EVIDENCE_IDS
+        and evidence_state.stage in VALID_EVIDENCE_STAGES
+        for evidence_id, evidence_state in state.evidence.items()
+    )
+
+    return collected_count >= MIN_EVIDENCE_COUNT and state.score >= ACCUSE_THRESHOLD
+
 
 def create_initial_state(session_id: str) -> GameState:
     """새 게임의 서버 관리 초기 상태를 생성합니다."""
@@ -68,12 +84,11 @@ def transition_phase(
     # 지목 화면 진입 조건입니다.
     # 실제 지목 판정과 기회 차감은 #29에서 구현합니다.
     if target == GamePhase.ACCUSATION:
-        if state.score < ACCUSE_THRESHOLD:
-            raise PermissionError("증거 점수가 11점 이상이어야 합니다.")
+        if not meets_accusation_requirements(state):
+            raise PermissionError("증거 5개 이상 및 수집 점수 11점 이상이 필요합니다.")
 
         if state.attempts_left <= 0:
             raise PermissionError("남은 지목 기회가 없습니다.")
-
     # 사건 판정이 완료된 경우에만 종료할 수 있습니다.
     if target == GamePhase.FINISHED and state.outcome in (None, "ONGOING"):
         raise ValueError("사건 판정이 완료되지 않았습니다.")

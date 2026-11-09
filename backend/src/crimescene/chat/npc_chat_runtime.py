@@ -1,5 +1,6 @@
 """Issue #23 - NPC RAG, Ollama, 출력 검증 및 세션 저장 통합."""
 
+import logging
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 
@@ -151,7 +152,14 @@ def run_npc_chat(
 
     character_id = rag_result.character_id
     plan = rag_result.reply_plan
-
+    logging.getLogger(__name__).warning(
+        "NPC_RAG_DIAG npc=%s topics=%s can_call_llm=%s source_count=%d target_found=%s",
+        character_id,
+        tuple(matched_topics),
+        plan.can_call_llm,
+        len(plan.source_ids),
+        "K-C01-03" in plan.source_ids,
+    )
     if not isinstance(plan, NPCReplyPlan):
         raise TypeError("NPCReplyPlan이 필요합니다.")
 

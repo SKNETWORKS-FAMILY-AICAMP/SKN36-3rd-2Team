@@ -34,6 +34,19 @@ from crimescene.scenario.schemas.evidence import EvidenceRule
 from crimescene.scenario.schemas.game_state import GameState
 from crimescene.scenario.schemas.relationship import RelationshipSourceEdge
 
+# ============================================================
+# Constants
+# ============================================================
+
+# 게임 시작부터 공개된 엔티티
+# V01: 신기범 (피해자)
+PUBLIC_ENTITY_IDS = frozenset({"V01"})
+
+
+# ============================================================
+# RAG Resources
+# ============================================================
+
 
 @dataclass(frozen=True, slots=True, repr=False)
 class NPCRAGResources:
@@ -57,6 +70,7 @@ class NPCRAGResources:
     evaluator: PolicyEvaluator
 
     # 서버가 승인한 Graph 접근 권한만 전달한다.
+    # 기본값은 기존 호출부와 호환되도록 유지한다.
     allowed_entity_ids: tuple[str, ...] = ()
     known_relation_ids: tuple[str, ...] = ()
     known_evidence_ids: tuple[str, ...] = ()
@@ -69,6 +83,11 @@ class NPCChatRAGResult:
     character_id: str
     history: tuple[NPCExchange, ...]
     reply_plan: NPCReplyPlan
+
+
+# ============================================================
+# Validation
+# ============================================================
 
 
 def _validate_query(query: str) -> str:
@@ -99,6 +118,37 @@ def _empty_graph(character_id: str) -> QuestionGraphContext:
     )
 
 
+def _resolve_allowed_entity_ids(
+    resources: NPCRAGResources,
+) -> tuple[str, ...]:
+    """기본 공개 엔티티와 서버 승인 엔티티를 통합한다.
+
+    보안:
+        - 공개 엔티티 V01만 기본 허용한다.
+        - 다른 NPC의 해금 권한을 변경하지 않는다.
+        - 증거 수집 및 공개 조건을 우회하지 않는다.
+        - 실제 RAG 문서 접근 정책은 기존 엔진에서 검증한다.
+    """
+
+    if isinstance(resources.allowed_entity_ids, (str, bytes)):
+        raise TypeError("허용 엔티티 목록 형식이 올바르지 않습니다.")
+
+    allowed_ids = set(PUBLIC_ENTITY_IDS)
+
+    for entity_id in resources.allowed_entity_ids:
+        if not isinstance(entity_id, str) or not entity_id.strip():
+            raise ValueError("유효하지 않은 엔티티 ID입니다.")
+
+        allowed_ids.add(entity_id)
+
+    return tuple(sorted(allowed_ids))
+
+
+# ============================================================
+# NPC Hybrid RAG
+# ============================================================
+
+
 def prepare_npc_chat_rag(
     query: str,
     *,
@@ -114,17 +164,25 @@ def prepare_npc_chat_rag(
     """현재 NPC에 한정된 Hybrid RAG 응답 계획을 생성한다.
 
     처리 순서:
-        1. 세션의 현재 NPC 확인
-        2. 페르소나 및 진술 규칙 구성
-        3. 정책 제한 Hybrid RAG 검색
-        4. Graph 검색 컨텍스트 확인
-        5. 최종 응답 접근 검증
-        6. 현재 NPC의 대화 이력만 반환
+        1. 입력값 및 세션 검증
+        2. 공개 엔티티 접근 권한 구성
+        3. NPC 페르소나 및 진술 규칙 구성
+        4. 정책 제한 Hybrid RAG 검색
+        5. Graph 검색 컨텍스트 검증
+        6. 최종 RAG 접근 권한 검증
+        7. 현재 NPC 대화 이력 반환
 
     이 함수는 LLM을 직접 호출하지 않는다.
     """
 
+    # --------------------------------------------------------
+    # 1. 입력값 검증
+    # --------------------------------------------------------
+
     question = _validate_query(query)
+
+    if not isinstance(state, GameState):
+        raise TypeError("GameState가 필요합니다.")
 
     if not isinstance(session_store, NPCSessionStore):
         raise TypeError("NPCSessionStore가 필요합니다.")
@@ -137,13 +195,27 @@ def prepare_npc_chat_rag(
 
     topics = tuple(matched_topics)
 
-    # 1. 서버 세션에서 현재 선택된 NPC를 가져온다.
+    # --------------------------------------------------------
+    # 2. 공개 엔티티 접근 권한 구성
+    # --------------------------------------------------------
+
+    # 피해자 V01은 최초부터 질문할 수 있도록 허용한다.
+    # 기존 서버 승인 엔티티 목록은 그대로 유지한다.
+    allowed_entity_ids = _resolve_allowed_entity_ids(resources)
+
+    # --------------------------------------------------------
+    # 3. 현재 선택된 NPC 확인
+    # --------------------------------------------------------
+
     character_id = session_store.get_active_npc(state)
 
     if character_id is None:
         raise PermissionError("현재 대화 가능한 NPC가 없습니다.")
 
-    # 2. 기본 말투만 포함하는 페르소나를 구성한다.
+    # --------------------------------------------------------
+    # 4. NPC 페르소나 및 진술 규칙
+    # --------------------------------------------------------
+
     social_personas = build_social_personas(
         resources.personas,
         active_character_id=character_id,
@@ -158,7 +230,10 @@ def prepare_npc_chat_rag(
         matched_topics=topics,
     )
 
-    # 3. 기존 #20 사전 접근 정책을 적용한 통합 검색.
+    # --------------------------------------------------------
+    # 5. Hybrid RAG 검색
+    # --------------------------------------------------------
+
     candidates = search_policy_scoped_multisource_candidates(
         question,
         qdrant_client=resources.qdrant_client,
@@ -173,16 +248,17 @@ def prepare_npc_chat_rag(
         registry=resources.registry,
         trusted_edges=list(resources.trusted_edges),
         evidence_rules=resources.evidence_rules,
-        allowed_entity_ids=resources.allowed_entity_ids,
+        allowed_entity_ids=allowed_entity_ids,
         matched_topics=topics,
         candidate_k=candidate_k,
         relation_top_k=relation_top_k,
         evidence_top_k=evidence_top_k,
     )
 
-    # 4. Graph 후보가 있을 때만 후속 검증용 컨텍스트를 조회한다.
-    # 현재 검색 API는 Graph 컨텍스트를 반환하지 않으므로,
-    # 해당 경우 재조회한다. 추후 단일 조회로 최적화할 수 있다.
+    # --------------------------------------------------------
+    # 6. Graph 검색 결과 검증
+    # --------------------------------------------------------
+
     if any(item.kind in {"relation", "evidence"} for item in candidates):
         graph_context = retrieve_question_graph(
             question,
@@ -192,7 +268,7 @@ def prepare_npc_chat_rag(
             registry=resources.registry,
             trusted_edges=list(resources.trusted_edges),
             evidence_rules=resources.evidence_rules,
-            allowed_entity_ids=resources.allowed_entity_ids,
+            allowed_entity_ids=allowed_entity_ids,
             relation_top_k=relation_top_k,
             evidence_top_k=evidence_top_k,
         )
@@ -201,9 +277,10 @@ def prepare_npc_chat_rag(
             raise ValueError("Graph 검색 대상 NPC가 일치하지 않습니다.")
 
         relation_ids = {relation.edge_id for relation in graph_context.relations}
+
         evidence_ids = {evidence.evidence_id for evidence in graph_context.evidence}
 
-        # 두 조회 결과가 달라졌다면 근거 생성 전에 실패 처리한다.
+        # Graph 검색 결과가 변경되었다면 근거 생성 전에 차단한다.
         for candidate in candidates:
             if candidate.kind == "relation" and candidate.item_id not in relation_ids:
                 raise ValueError("Graph 관계 후보가 일치하지 않습니다.")
@@ -214,11 +291,17 @@ def prepare_npc_chat_rag(
     else:
         graph_context = _empty_graph(character_id)
 
-    # 검색 도중 NPC가 전환되었다면 결과를 폐기한다.
+    # --------------------------------------------------------
+    # 7. 검색 도중 NPC 변경 여부 확인
+    # --------------------------------------------------------
+
     if session_store.get_active_npc(state) != character_id:
         raise RuntimeError("검색 도중 NPC가 변경되었습니다.")
 
-    # 5. 기존 #20 최종 접근 권한 검증을 재사용한다.
+    # --------------------------------------------------------
+    # 8. 최종 RAG 접근 권한 검증
+    # --------------------------------------------------------
+
     reply_plan = prepare_npc_reply(
         question,
         candidates=candidates,
@@ -235,14 +318,21 @@ def prepare_npc_chat_rag(
         npc_persona=system_prompt,
         known_relation_ids=resources.known_relation_ids,
         known_evidence_ids=resources.known_evidence_ids,
-        allowed_entity_ids=resources.allowed_entity_ids,
+        allowed_entity_ids=allowed_entity_ids,
         matched_topics=topics,
         top_k=top_k,
     )
 
-    # 6. 다른 NPC로 전환되지 않았는지 다시 확인한다.
+    # --------------------------------------------------------
+    # 9. 최종 NPC 상태 검증
+    # --------------------------------------------------------
+
     if session_store.get_active_npc(state) != character_id:
         raise RuntimeError("검색 도중 NPC가 변경되었습니다.")
+
+    # --------------------------------------------------------
+    # 10. 대화 이력 조회
+    # --------------------------------------------------------
 
     history = session_store.get_history(
         state,

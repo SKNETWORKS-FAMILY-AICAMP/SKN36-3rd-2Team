@@ -243,3 +243,43 @@ def test_custom_entity_type_requires_permission(registry):
     )
 
     assert [item.entity_id for item in allowed] == ["SERIN_SCHOOL"]
+
+
+from crimescene.retriever.query_entity_extractor import (
+    InaccessibleEntityMentionError,
+)
+
+
+def test_public_victim_does_not_unlock_other_characters(registry):
+    case_registry = [
+        *registry,
+        {
+            "case_id": "CASE-001",
+            "entity_id": "V01",
+            "type": "Person",
+            "label": "신기범",
+        },
+    ]
+
+    state = make_state()
+
+    # 공개 피해자의 이름은 질문할 수 있어야 합니다.
+    result = extract_question_entities(
+        "신기범의 마지막 일정은 무엇인가요?",
+        registry=case_registry,
+        state=state,
+        allowed_entity_ids=("V01",),
+        reject_inaccessible_mentions=True,
+    )
+
+    assert [item.entity_id for item in result] == ["V01"]
+
+    # 공개 피해자를 허용해도 미해금 NPC는 차단합니다.
+    with pytest.raises(InaccessibleEntityMentionError):
+        extract_question_entities(
+            "신기범과 박민수는 어떤 관계인가요?",
+            registry=case_registry,
+            state=state,
+            allowed_entity_ids=("V01",),
+            reject_inaccessible_mentions=True,
+        )

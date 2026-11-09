@@ -16,12 +16,16 @@ from crimescene.chat.npc_history_display import render_stored_npc_message
 from crimescene.chat.npc_persona import EXPECTED_CHARACTER_IDS
 from crimescene.chat.npc_rag_service import NPCRAGResources
 from crimescene.chat.npc_session import MAX_MESSAGE_LENGTH
-from crimescene.retriever.graph_search import search_character_relations
+from crimescene.retriever.graph_search import (
+    is_relation_visible,
+    search_character_relations,
+)
 from crimescene.scenario.accusation import AccusationStatus, can_accuse
 from crimescene.scenario.accusation_service import (
     submit_accusation_request_atomic,
 )
 from crimescene.scenario.case_truth import CaseTruth
+from crimescene.scenario.document_access import select_authorized_player_documents
 from crimescene.scenario.evidence_collection import get_collection_progress
 from crimescene.scenario.evidence_service import collect_evidence_atomic
 from crimescene.scenario.game_progress import (
@@ -170,6 +174,13 @@ class EvidenceAvailableResponse(BaseModel):
     items: list[EvidenceAvailableItemResponse]
 
 
+class EvidenceDocumentResponse(BaseModel):
+    id: str
+    label: str
+    title: str
+    body: str
+
+
 class EvidenceDetailResponse(BaseModel):
     id: str
     title: str
@@ -177,6 +188,7 @@ class EvidenceDetailResponse(BaseModel):
     holderId: str
     acquiredBy: str | None
     confirmedRelations: list[dict[str, str]]
+    documents: list[EvidenceDocumentResponse] = Field(default_factory=list)
 
 
 class ProgressResponse(BaseModel):
@@ -1103,14 +1115,99 @@ def create_app(
             raise HTTPException(
                 status_code=409, detail="증거 데이터가 일치하지 않습니다."
             )
-        # No fabricated document text/acquisition method: original body API is pending.
+        resources = getattr(
+            request.app.state,
+            "dialogue_resources",
+            dialogue_resources,
+        )
+
+        documents: list[EvidenceDocumentResponse] = []
+        if (
+            resources is not None
+            and getattr(resources, "documents", None) is not None
+            and getattr(resources, "evaluator", None) is not None
+        ):
+            # 공개 가능한 플레이어 문서만 기존 접근 정책으로 재검증합니다.
+            authorized = {
+                document.doc_id: document
+                for document in select_authorized_player_documents(
+                    resources.documents,
+                    state,
+                    resources.evaluator,
+                )
+            }
+            collected = {
+                item_id
+                for item_id, item_state in state.evidence.items()
+                if item_state.stage in {"found", "resolved"}
+            }
+
+            for document in resources.documents:
+                if document.family != "evidence":
+                    continue
+                if document.access_scope != "collected_evidence":
+                    continue
+                if evidence_id not in document.source_evidence_ids:
+                    continue
+                # 연결된 다른 증거가 미수집이면 해당 문서 전체를 차단합니다.
+                if not set(document.source_evidence_ids).issubset(collected):
+                    continue
+
+                approved = authorized.get(document.doc_id)
+                if approved is None:
+                    continue
+
+                documents.append(
+                    EvidenceDocumentResponse(
+                        id=approved.doc_id,
+                        label=f"문서 {len(documents) + 1}",
+                        title=approved.title,
+                        body=approved.content,
+                    )
+                )
+
+        # 플레이어에게 이미 공개된 증거 문서 또는 증거 해금 조건과
+        # 직접 연결된 관계만 공개합니다. 관리자 관계/미해금 NPC는 제외합니다.
+        approved_doc_ids = {document.id for document in documents}
+        visible_people = set(state.unlocked_characters) & set(EXPECTED_CHARACTER_IDS)
+        visible_people.add("V01")  # 이미 공개된 피해자
+        confirmed_relations: list[dict[str, str]] = []
+        seen_relations: set[tuple[str, str]] = set()
+        trusted_edges = (
+            getattr(resources, "trusted_edges", ()) if resources is not None else ()
+        )
+        for edge in sorted(trusted_edges or (), key=lambda item: item.edge_id):
+            # 증거를 가진 인물과 직접 연결된 관계만 표시합니다.
+            if rule.holder not in {edge.source_id, edge.target_id}:
+                continue
+            other_id = (
+                edge.target_id if edge.source_id == rule.holder else edge.source_id
+            )
+            if other_id not in visible_people:
+                continue
+            # 수집 또는 공개 승인된 문서와 직접 연관되지 않으면 제외합니다.
+            if (
+                evidence_id not in edge.required_evidence
+                and not approved_doc_ids.intersection(edge.source_doc_ids)
+            ):
+                continue
+            # 기존 Neo4j 관계 검색과 동일한 공개 정책 판정 함수를 사용합니다.
+            if not is_relation_visible(edge, state):
+                continue
+            pair = (other_id, edge.relation)
+            if pair in seen_relations:
+                continue
+            seen_relations.add(pair)
+            confirmed_relations.append({"id": other_id, "label": edge.relation})
+
         return EvidenceDetailResponse(
             id=evidence_id,
             title=rule.name,
-            body=None,
+            body=documents[0].body if documents else None,
             holderId=rule.holder,
-            acquiredBy=None,
-            confirmedRelations=[],
+            acquiredBy=None,  # 획득 경로는 현재 GameState에 저장되지 않습니다.
+            confirmedRelations=confirmed_relations,
+            documents=documents,
         )
 
     # API: 게임 진행률 조회

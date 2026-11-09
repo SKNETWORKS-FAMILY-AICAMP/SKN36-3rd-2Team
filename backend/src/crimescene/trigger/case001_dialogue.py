@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from crimescene.chat.npc_chat_runtime import NPCChatTurn, run_npc_chat
 from crimescene.chat.npc_rag_service import NPCRAGResources
 from crimescene.chat.npc_session import NPCSessionStore
+from crimescene.scenario.loaders.unlock_graph_loader import Case001UnlockRules
 from crimescene.scenario.npc_access import (
     NPCKnowledgeCardV71,
     select_authorized_npc_cards,
@@ -107,6 +108,7 @@ def run_case001_npc_dialogue(
     policies: Mapping[str, AccessPolicy],
     trigger_rules: Iterable[NPCTriggerRule],
     presented_evidence_id: str | None = None,
+    flag_config: Case001UnlockRules | None = None,
 ) -> Case001DialogueResult:
     """증거 제시 → 승인된 트리거 → 기존 보안 RAG → 실제 인용 카드 기록.
 
@@ -146,6 +148,7 @@ def run_case001_npc_dialogue(
         evidence_rules=resources.evidence_rules,
         allowed_recipients=recipients,
         presented_evidence_id=presented_evidence_id,
+        flag_config=flag_config,  # 추가
     )
 
     # matched_topics는 플레이어 입력이 아니라

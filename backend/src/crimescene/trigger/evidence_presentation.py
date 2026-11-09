@@ -12,6 +12,8 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
 from crimescene.chat.npc_persona import EXPECTED_CHARACTER_IDS
+from crimescene.scenario.flag_progress import grant_case001_flags
+from crimescene.scenario.loaders.unlock_graph_loader import Case001UnlockRules
 from crimescene.scenario.policy_evaluator import PolicyEvaluator
 from crimescene.scenario.schemas.evidence import EvidenceRule
 from crimescene.scenario.schemas.game_state import GameState
@@ -154,6 +156,7 @@ def process_npc_dialogue_event(
     evidence_rules: Mapping[str, EvidenceRule],
     allowed_recipients: Mapping[str, frozenset[str]],
     presented_evidence_id: str | None = None,
+    flag_config: Case001UnlockRules | None = None,  # 추가
 ) -> NPCDialogueEventResult:
     """증거 제시와 대화 트리거를 순서대로 처리한다.
 
@@ -168,6 +171,20 @@ def process_npc_dialogue_event(
 
     if not isinstance(state, GameState):
         raise TypeError("GameState가 필요합니다.")
+    if flag_config is not None and not isinstance(flag_config, Case001UnlockRules):
+        raise TypeError("올바른 CASE-001 해금 규칙이 필요합니다.")
+
+    rule_list = tuple(trigger_rules)
+
+    # L01~L05는 실제 시나리오 이벤트 판정으로만 지급합니다.
+    reserved_flags = {f"L{i:02d}" for i in range(1, 6)}
+
+    for rule in rule_list:
+        if not isinstance(rule, NPCTriggerRule):
+            raise TypeError("NPC 트리거 규칙이 올바르지 않습니다.")
+
+        if reserved_flags.intersection(rule.grant_flags):
+            raise ValueError("L01~L05는 직접 지급할 수 없습니다.")
 
     # 1. 증거 제시 요청이 없는 일반 대화
     if presented_evidence_id is None:
@@ -186,18 +203,29 @@ def process_npc_dialogue_event(
             allowed_recipients=allowed_recipients,
         )
 
-    # 3. 증거 제시 후의 상태를 기준으로 트리거 판정
     trigger_result = apply_npc_triggers(
         question,
         state=presentation.state,
         active_character_id=active_character_id,
-        rules=trigger_rules,
+        rules=rule_list,
         evaluator=evaluator,
     )
 
+    updated_state = trigger_result.state
+
+    # 실제 시나리오 규칙이 제공된 경우에만 플래그를 평가합니다.
+    if flag_config is not None:
+        updated_state = grant_case001_flags(
+            state=updated_state,
+            active_character_id=active_character_id,
+            matched_topics=trigger_result.matched_topics,
+            presented_evidence_id=presented_evidence_id,
+            flag_requirements=flag_config.flag_requirements,
+            flag_sources=flag_config.flag_sources,
+        )
     # 4. 최종 결과 반환
     return NPCDialogueEventResult(
-        state=trigger_result.state,
+        state=updated_state,
         presentation_created=presentation.created,
         trigger_ids=trigger_result.trigger_ids,
         matched_topics=trigger_result.matched_topics,

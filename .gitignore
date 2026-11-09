@@ -65,3 +65,21 @@ backend/data/indexes/
 # ==========================================
 /.local/
 /backend/data/scenario/engine_only/
+
+
+# Local game database
+backend/.local/
+
+# Frontend build artifacts
+**/node_modules/
+**/dist/
+*.tsbuildinfo
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+
+# SQLite game persistence
+/backend/data/*.sqlite3*

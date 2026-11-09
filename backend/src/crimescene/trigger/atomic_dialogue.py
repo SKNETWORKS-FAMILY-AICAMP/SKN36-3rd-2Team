@@ -18,7 +18,7 @@ from crimescene.retriever.npc_output_guard import NPCGroundedReply
 from crimescene.retriever.npc_response_gate import FALLBACK_REPLY
 from crimescene.scenario.loaders.unlock_graph_loader import Case001UnlockRules
 from crimescene.scenario.schemas.access_policy import AccessPolicy
-from crimescene.scenario.schemas.game_state import GameState
+from crimescene.scenario.schemas.game_state import GamePhase, GameState
 from crimescene.trigger.case001_dialogue import (
     Case001DialogueResult,
     run_case001_npc_dialogue,
@@ -28,6 +28,95 @@ from crimescene.trigger.npc_trigger import NPCTriggerRule
 
 class SQLiteCase001Repository(SQLiteNPCSessionRepository):
     """NPC 대화와 게임 진행 상태를 같은 SQLite 파일에서 관리한다."""
+
+    def select_character_atomic(
+        self,
+        *,
+        expected_state: GameState,
+        character_id: str,
+    ) -> GameState:
+        """게임 상태와 현재 NPC 선택을 한 SQLite 트랜잭션으로 갱신합니다."""
+
+        if not isinstance(expected_state, GameState):
+            raise TypeError("GameState가 필요합니다.")
+        if expected_state.case_id != "CASE-001":
+            raise ValueError("지원하지 않는 사건입니다.")
+        if not isinstance(character_id, str):
+            raise TypeError("NPC ID는 문자열이어야 합니다.")
+        self._validate_character(character_id)
+        if expected_state.phase != GamePhase.INVESTIGATION:
+            raise PermissionError("조사 단계에서만 NPC를 선택할 수 있습니다.")
+        if expected_state.outcome not in (None, "ONGOING"):
+            raise PermissionError("종료된 게임입니다.")
+        if character_id not in expected_state.unlocked_characters:
+            raise PermissionError("해금되지 않은 NPC입니다.")
+
+        self._validate_session_id(expected_state.session_id)
+
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+
+            stored = db.execute(
+                """
+                SELECT revision, state_json
+                FROM game_states
+                WHERE session_id = ?
+                """,
+                (expected_state.session_id,),
+            ).fetchone()
+            selection = db.execute(
+                """
+                SELECT active_character_id, revision
+                FROM npc_sessions
+                WHERE session_id = ?
+                """,
+                (expected_state.session_id,),
+            ).fetchone()
+
+            if (
+                stored is None
+                or stored["revision"] != expected_state.revision
+                or GameState.model_validate_json(stored["state_json"]) != expected_state
+            ):
+                raise ValueError("오래되었거나 변경된 GameState입니다.")
+
+            if (
+                selection is None
+                or selection["revision"] != expected_state.revision
+                or selection["active_character_id"]
+                not in expected_state.unlocked_characters
+            ):
+                raise ValueError("NPC 선택 상태가 일치하지 않습니다.")
+
+            # 중복 선택은 게임 상태나 revision을 바꾸지 않습니다.
+            if selection["active_character_id"] == character_id:
+                return expected_state
+
+            updated = GameState.model_validate(
+                {
+                    **expected_state.model_dump(mode="python"),
+                    "revision": expected_state.revision + 1,
+                }
+            )
+
+            db.execute(
+                """
+                UPDATE game_states
+                SET revision = ?, state_json = ?
+                WHERE session_id = ?
+                """,
+                (updated.revision, updated.model_dump_json(), updated.session_id),
+            )
+            db.execute(
+                """
+                UPDATE npc_sessions
+                SET active_character_id = ?, revision = ?
+                WHERE session_id = ?
+                """,
+                (character_id, updated.revision, updated.session_id),
+            )
+
+        return updated
 
     def commit_state(
         self,

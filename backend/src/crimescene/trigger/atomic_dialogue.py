@@ -28,6 +28,102 @@ from crimescene.trigger.npc_trigger import NPCTriggerRule
 class SQLiteCase001Repository(SQLiteNPCSessionRepository):
     """NPC 대화와 게임 진행 상태를 같은 SQLite 파일에서 관리한다."""
 
+    def commit_state(
+        self,
+        *,
+        expected_state: GameState,
+        updated_state: GameState,
+    ) -> GameState:
+        """일반 게임 상태 변경을 revision 검사 후 원자적으로 저장합니다."""
+
+        if not isinstance(expected_state, GameState):
+            raise TypeError("expected_state는 GameState여야 합니다.")
+
+        if not isinstance(updated_state, GameState):
+            raise TypeError("updated_state는 GameState여야 합니다.")
+
+        if (
+            expected_state.case_id != "CASE-001"
+            or updated_state.case_id != expected_state.case_id
+            or updated_state.session_id != expected_state.session_id
+        ):
+            raise ValueError("사건 또는 세션 정보가 일치하지 않습니다.")
+
+        if updated_state.revision != expected_state.revision + 1:
+            raise ValueError("revision은 정확히 1 증가해야 합니다.")
+
+        # model_copy(update=...)로 생성된 객체도 저장 전에 다시 검증합니다.
+        updated_state = GameState.model_validate(
+            updated_state.model_dump(mode="python")
+        )
+
+        self._validate_session_id(expected_state.session_id)
+
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+
+            row = db.execute(
+                """
+                SELECT revision, state_json
+                FROM game_states
+                WHERE session_id = ?
+                """,
+                (expected_state.session_id,),
+            ).fetchone()
+
+            selection = db.execute(
+                """
+                SELECT active_character_id, revision
+                FROM npc_sessions
+                WHERE session_id = ?
+                """,
+                (expected_state.session_id,),
+            ).fetchone()
+
+            # 저장된 상태와 요청의 기준 상태가 정확히 일치해야 합니다.
+            if (
+                row is None
+                or row["revision"] != expected_state.revision
+                or GameState.model_validate_json(row["state_json"]) != expected_state
+            ):
+                raise ValueError("오래되었거나 변경된 GameState입니다.")
+
+            if (
+                selection is None
+                or selection["revision"] != expected_state.revision
+                or selection["active_character_id"]
+                not in updated_state.unlocked_characters
+            ):
+                raise ValueError("NPC 세션 상태가 일치하지 않습니다.")
+
+            # GameState와 NPC 세션 revision을 하나의 트랜잭션으로 갱신합니다.
+            db.execute(
+                """
+                UPDATE game_states
+                SET revision = ?, state_json = ?
+                WHERE session_id = ?
+                """,
+                (
+                    updated_state.revision,
+                    updated_state.model_dump_json(),
+                    updated_state.session_id,
+                ),
+            )
+
+            db.execute(
+                """
+                UPDATE npc_sessions
+                SET revision = ?
+                WHERE session_id = ?
+                """,
+                (
+                    updated_state.revision,
+                    updated_state.session_id,
+                ),
+            )
+
+        return updated_state
+
     def __init__(
         self,
         db_path: Path,

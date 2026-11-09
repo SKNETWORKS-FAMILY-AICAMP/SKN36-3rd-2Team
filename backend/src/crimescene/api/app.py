@@ -3,19 +3,30 @@
 import hashlib
 import hmac
 import secrets
+from collections.abc import Callable, Mapping
+from contextlib import AbstractAsyncContextManager
 
 from fastapi import Cookie, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from crimescene.chat.npc_persona import EXPECTED_CHARACTER_IDS
+from crimescene.chat.npc_rag_service import NPCRAGResources
+from crimescene.chat.npc_session import MAX_MESSAGE_LENGTH
+from crimescene.scenario.evidence_service import collect_evidence_atomic
 from crimescene.scenario.game_progress import (
     create_initial_state,
     meets_accusation_requirements,
     transition_phase,
 )
+from crimescene.scenario.loaders.unlock_graph_loader import Case001UnlockRules
+from crimescene.scenario.schemas.access_policy import AccessPolicy
 from crimescene.scenario.schemas.game_state import GamePhase, GameState
-from crimescene.trigger.atomic_dialogue import SQLiteCase001Repository
+from crimescene.trigger.atomic_dialogue import (
+    SQLiteCase001Repository,
+    run_case001_npc_dialogue_atomic,
+)
+from crimescene.trigger.npc_trigger import NPCTriggerRule
 
 # ============================================================
 # Constants
@@ -64,9 +75,64 @@ class GameResponse(BaseModel):
     events: list[dict[str, str]]
 
 
+class ChatRequest(BaseModel):
+    """플레이어의 NPC 대화 요청."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    question: str = Field(
+        min_length=1,
+        max_length=MAX_MESSAGE_LENGTH,
+    )
+    presentedEvidenceId: str | None = Field(
+        default=None,
+        pattern=r"^E(?:0[1-9]|10)$",
+    )
+
+    @field_validator("question")
+    @classmethod
+    def validate_question(cls, value: str) -> str:
+        question = value.strip()
+
+        if not question:
+            raise ValueError("질문이 비어 있습니다.")
+
+        return question
+
+
+class ChatResponse(BaseModel):
+    """검증된 NPC 응답과 최신 게임 상태."""
+
+    characterId: str
+    display_text: str
+    game: GameResponse
+
+
+class ChatMessageResponse(BaseModel):
+    userMessage: str
+    displayText: str
+
+
+class ChatHistoryResponse(BaseModel):
+    sessionId: str
+    characterId: str
+    messages: list[ChatMessageResponse]
+
+
 # ============================================================
 # FastAPI Application Factory
 # ============================================================
+
+
+class EvidenceCollectResponse(BaseModel):
+    """획득 결과와 서버가 갱신한 게임 상태."""
+
+    evidenceId: str
+    created: bool
+    collectedCount: int
+    totalCount: int
+    newlyUnlockedCharacters: list[str]
+    game: GameResponse
 
 
 def create_app(
@@ -74,6 +140,11 @@ def create_app(
     *,
     session_secret: str,
     secure_cookie: bool = False,
+    dialogue_resources: NPCRAGResources | None = None,
+    dialogue_policies: Mapping[str, AccessPolicy] | None = None,
+    dialogue_triggers: tuple[NPCTriggerRule, ...] = (),
+    dialogue_flag_config: Case001UnlockRules | None = None,
+    lifespan: Callable[[FastAPI], AbstractAsyncContextManager[None]] | None = None,
 ) -> FastAPI:
     """서버 관리 게임 상태와 FastAPI를 연결합니다."""
 
@@ -97,6 +168,7 @@ def create_app(
         title="CASE-001 Game API",
         description="마지막 기록: 사라진 공동체",
         version="0.1.0",
+        lifespan=lifespan,
     )
 
     # --------------------------------------------------------
@@ -490,6 +562,275 @@ def create_app(
                     "characterId": character_id,
                 }
             ],
+        )
+
+    @app.get(
+        "/api/games/{session_id}/chats/{character_id}",
+        response_model=ChatHistoryResponse,
+    )
+    def get_chat_history(
+        session_id: str,
+        character_id: str,
+        request: Request,
+        case001_owner: str | None = Cookie(default=None),
+    ) -> ChatHistoryResponse:
+        """현재 플레이어에게 허용된 NPC 대화 기록만 조회합니다."""
+
+        state = load_owned_request(
+            session_id,
+            request,
+            case001_owner,
+        )
+
+        if state.phase == GamePhase.PROLOGUE:
+            raise HTTPException(
+                status_code=409,
+                detail="아직 조사가 시작되지 않았습니다.",
+            )
+
+        if character_id not in EXPECTED_CHARACTER_IDS:
+            raise HTTPException(
+                status_code=422,
+                detail="유효하지 않은 NPC입니다.",
+            )
+
+        if character_id not in state.unlocked_characters:
+            raise HTTPException(
+                status_code=403,
+                detail="아직 해금되지 않은 NPC입니다.",
+            )
+
+        # 조회 대상 세션은 서버가 소유권 검증을 완료한 세션입니다.
+        history = repository.load_history(
+            session_id,
+            character_id,
+        )
+
+        return ChatHistoryResponse(
+            sessionId=session_id,
+            characterId=character_id,
+            messages=[
+                ChatMessageResponse(
+                    userMessage=exchange.user_message,
+                    displayText=exchange.npc_message,
+                )
+                for exchange in history
+            ],
+        )
+
+    @app.post(
+        "/api/games/{session_id}/chat",
+        response_model=ChatResponse,
+    )
+    def chat_with_npc(
+        session_id: str,
+        body: ChatRequest,
+        request: Request,
+        case001_owner: str | None = Cookie(default=None),
+    ) -> ChatResponse:
+        """기존 NPC 대화 엔진을 호출하고 검증된 결과만 반환합니다."""
+
+        state = load_owned_request(
+            session_id,
+            request,
+            case001_owner,
+        )
+
+        if state.phase != GamePhase.INVESTIGATION or state.outcome not in (
+            None,
+            "ONGOING",
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="조사 단계에서만 대화할 수 있습니다.",
+            )
+
+        selection = repository.load_selection(session_id)
+
+        if (
+            selection is None
+            or selection[1] != state.revision
+            or selection[0] not in state.unlocked_characters
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="NPC 선택 상태가 올바르지 않습니다.",
+            )
+
+        if (
+            body.presentedEvidenceId is not None
+            and body.presentedEvidenceId not in state.evidence
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="수집하지 않은 증거입니다.",
+            )
+
+        # 서버의 실제 RAG 리소스가 연결되지 않았다면 실행하지 않습니다.
+        live_resources = getattr(
+            request.app.state, "dialogue_resources", dialogue_resources
+        )
+        live_policies = getattr(
+            request.app.state, "dialogue_policies", dialogue_policies
+        )
+        live_triggers = getattr(
+            request.app.state, "dialogue_triggers", dialogue_triggers
+        )
+        live_flags = getattr(
+            request.app.state, "dialogue_flag_config", dialogue_flag_config
+        )
+
+        if live_resources is None or live_policies is None:
+            raise HTTPException(
+                status_code=503,
+                detail="NPC 대화 엔진이 준비되지 않았습니다.",
+            )
+
+        try:
+            result = run_case001_npc_dialogue_atomic(
+                body.question,
+                session_id=session_id,
+                repository=repository,
+                resources=live_resources,
+                policies=dict(live_policies),
+                trigger_rules=live_triggers,
+                presented_evidence_id=body.presentedEvidenceId,
+                flag_config=live_flags,
+            )
+
+        except PermissionError:
+            raise HTTPException(
+                status_code=403,
+                detail="현재 NPC 대화 또는 증거 제시가 허용되지 않습니다.",
+            ) from None
+
+        except ValueError:
+            raise HTTPException(
+                status_code=409,
+                detail="대화 처리 중 게임 상태가 변경되었습니다.",
+            ) from None
+
+        events = [
+            {
+                "type": "NPC_REPLIED",
+                "characterId": result.turn.character_id,
+            }
+        ]
+
+        if result.presentation_created:
+            events.append(
+                {
+                    "type": "EVIDENCE_PRESENTED",
+                    "evidenceId": body.presentedEvidenceId,
+                }
+            )
+
+        if result.disclosed_card_ids:
+            events.append({"type": "KNOWLEDGE_UPDATED"})
+
+        if result.trigger_ids:
+            events.append({"type": "GAME_PROGRESS_UPDATED"})
+
+        if not result.turn.display_text.strip():
+            raise HTTPException(
+                status_code=502,
+                detail="NPC 응답 형식이 올바르지 않습니다.",
+            )
+
+        return ChatResponse(
+            characterId=result.turn.character_id,
+            display_text=result.turn.display_text,
+            game=game_response(
+                result.state,
+                events=events,
+            ),
+        )
+
+    @app.post(
+        "/api/games/{session_id}/evidence/{evidence_id}/collect",
+        response_model=EvidenceCollectResponse,
+    )
+    def collect_game_evidence(
+        session_id: str,
+        evidence_id: str,
+        request: Request,
+        case001_owner: str | None = Cookie(default=None),
+    ) -> EvidenceCollectResponse:
+        """서버의 획득 허용 정책을 통과한 증거만 원자적으로 수집합니다."""
+        state = load_owned_request(session_id, request, case001_owner)
+
+        if state.phase != GamePhase.INVESTIGATION or state.outcome not in (
+            None,
+            "ONGOING",
+        ):
+            raise HTTPException(
+                status_code=409, detail="조사 단계에서만 증거를 수집할 수 있습니다."
+            )
+
+        # 명시적인 E01~E10만 허용합니다. 내부 규칙 및 관리자 정보는 반환하지 않습니다.
+        if evidence_id not in {f"E{i:02d}" for i in range(1, 11)}:
+            raise HTTPException(status_code=422, detail="유효하지 않은 증거 ID입니다.")
+
+        selection = repository.load_selection(session_id)
+        if selection is None or selection[1] != state.revision:
+            raise HTTPException(status_code=409, detail="NPC 선택 상태가 변경됐습니다.")
+        active_npc = selection[0]
+        if active_npc not in state.unlocked_characters:
+            raise HTTPException(status_code=403, detail="해금되지 않은 NPC입니다.")
+
+        resources = getattr(request.app.state, "dialogue_resources", None)
+        flags = getattr(request.app.state, "dialogue_flag_config", None)
+        policy_ids = getattr(request.app.state, "acquisition_policy_ids", None)
+        acquisition_evaluator = (
+            getattr(request.app.state, "acquisition_evaluator", resources.evaluator)
+            if resources is not None
+            else None
+        )
+
+        # 획득 정책 또는 해금 규칙이 누락되면 절대로 증거를 지급하지 않습니다.
+        if resources is None or flags is None or not policy_ids:
+            raise HTTPException(
+                status_code=503, detail="증거 수집 엔진이 준비되지 않았습니다."
+            )
+
+        if evidence_id not in policy_ids:
+            raise HTTPException(
+                status_code=403, detail="이 증거의 수집 조건이 설정되지 않았습니다."
+            )
+
+        try:
+            result = collect_evidence_atomic(
+                session_id=session_id,
+                evidence_id=evidence_id,
+                active_character_id=active_npc,
+                repository=repository,
+                evidence_rules=resources.evidence_rules,
+                acquisition_policy_ids=policy_ids,
+                evaluator=acquisition_evaluator,
+                unlock_rules=flags.npc_rules,
+            )
+        except PermissionError:
+            raise HTTPException(
+                status_code=403, detail="증거 수집 조건을 충족하지 않았습니다."
+            ) from None
+        except ValueError:
+            raise HTTPException(
+                status_code=409, detail="증거 수집 중 게임 상태가 변경됐습니다."
+            ) from None
+
+        events: list[dict[str, str]] = []
+        if result.created:
+            events.append({"type": "EVIDENCE_COLLECTED", "evidenceId": evidence_id})
+            for npc_id in result.unlocked_npcs:
+                events.append({"type": "NPC_UNLOCKED", "characterId": npc_id})
+
+        return EvidenceCollectResponse(
+            evidenceId=evidence_id,
+            created=result.created,
+            collectedCount=result.progress.collected_count,
+            totalCount=result.progress.total_count,
+            newlyUnlockedCharacters=list(result.unlocked_npcs),
+            game=game_response(result.state, events=events),
         )
 
     return app

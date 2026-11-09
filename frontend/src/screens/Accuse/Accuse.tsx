@@ -34,7 +34,7 @@ export default function Accuse() {
 
   const unlocked = session?.unlockedNpcs ?? []
   const can = !!session?.canAccuse
-  const ready = can && !!suspect && picked.length >= 1 && picked.length <= 3 && !busy
+  const ready = can && !!suspect && unlocked.includes(suspect) && picked.length >= 1 && picked.length <= 3 && !busy
 
   const toggle = (id: string) =>
     setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : p.length >= 3 ? p : [...p, id]))

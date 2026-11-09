@@ -1389,6 +1389,12 @@ def create_app(
                 detail="현재 범인을 지목할 수 없습니다.",
             )
 
+        if body.suspectId not in state.unlocked_characters:
+            raise HTTPException(
+                status_code=403,
+                detail="아직 해금되지 않은 NPC입니다.",
+            )
+
         rules = get_evidence_rules(request)
 
         try:

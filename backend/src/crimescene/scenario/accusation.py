@@ -128,6 +128,10 @@ def submit_accusation(
     if state.phase != GamePhase.ACCUSATION:
         raise PermissionError("지목 단계가 아닙니다.")
 
+    # 클라이언트가 미해금 인물을 직접 지정하는 것을 서버에서 차단합니다.
+    if suspect_id not in state.unlocked_characters:
+        raise PermissionError("아직 해금되지 않은 NPC는 지목할 수 없습니다.")
+
     # 유효한 지목 시도에 대해서만 기회를 차감합니다.
     remaining = state.attempts_left - 1
     correct = suspect_id == truth.perpetrator_character_id

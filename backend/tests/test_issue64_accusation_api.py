@@ -66,6 +66,7 @@ def prepared_game(tmp_path):
         updated = GameState.model_validate(
             {
                 **original.model_dump(),
+                "unlocked_characters": ["C01", "C02", "C03"],
                 "evidence": {
                     evidence_id: EvidenceState(stage="found").model_dump()
                     for evidence_id in evidence_ids

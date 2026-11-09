@@ -79,6 +79,7 @@ def test_real_accusation_all_ten_candidates(real_case):
     state = state.model_copy(
         update={
             "phase": GamePhase.INVESTIGATION,
+            "unlocked_characters": sorted(EXPECTED_CHARACTER_IDS),
             "evidence": {
                 evidence_id: EvidenceState(stage="found")
                 for evidence_id in evidence_rules
@@ -140,6 +141,7 @@ def test_accusation_state_does_not_expose_truth(real_case):
     state = state.model_copy(
         update={
             "phase": GamePhase.INVESTIGATION,
+            "unlocked_characters": sorted(EXPECTED_CHARACTER_IDS),
             "evidence": {
                 evidence_id: EvidenceState(stage="found")
                 for evidence_id in evidence_rules

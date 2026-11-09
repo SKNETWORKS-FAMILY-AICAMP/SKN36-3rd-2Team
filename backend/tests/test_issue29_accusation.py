@@ -49,6 +49,8 @@ def make_state(evidence_ids=("E01", "E02", "E03", "E04", "E05")):
     return state.model_copy(
         update={
             "phase": GamePhase.INVESTIGATION,
+            # 정상 지목 테스트는 실제로 해금된 NPC만 사용합니다.
+            "unlocked_characters": ["C01", "C02", "C03"],
             "evidence": {
                 evidence_id: EvidenceState(stage="found")
                 for evidence_id in evidence_ids

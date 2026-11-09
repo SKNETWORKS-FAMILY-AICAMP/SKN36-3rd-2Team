@@ -1,0 +1,18 @@
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  background: var(--ink-900);
+  color: var(--paper-200);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+* { box-sizing: border-box; }
+h1, h2, h3, p { margin: 0; }
+button { font-family: inherit; color: inherit; }
+::selection { background: var(--brass-700); color: var(--paper-100); }
+:focus-visible { outline: 2px solid var(--brass-400); outline-offset: 3px; }
+.serif { font-family: var(--font-serif); }
+.mono { font-family: var(--font-mono); }

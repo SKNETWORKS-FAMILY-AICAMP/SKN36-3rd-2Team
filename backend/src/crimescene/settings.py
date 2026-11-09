@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -16,6 +17,12 @@ class Settings(BaseSettings):
     # Application
     app_name: str = "AI Crime Scene"
     app_env: str = "development"
+
+    # NPC 응답 생성 공급자. 임베딩은 기존 Ollama bge-m3를 사용합니다.
+    llm_provider: Literal["ollama", "openai"] = "ollama"
+    openai_model: str = "gpt-5.6-luna"
+    openai_api_key: SecretStr = SecretStr("")
+    openai_timeout_seconds: float = 35.0
 
     # Ollama
     ollama_base_url: str = "http://localhost:11434"

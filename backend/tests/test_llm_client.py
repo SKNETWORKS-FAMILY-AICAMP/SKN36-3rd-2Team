@@ -5,6 +5,11 @@ import pytest
 from crimescene.chat import llm_client
 
 
+@pytest.fixture(autouse=True)
+def force_ollama_for_legacy_tests(monkeypatch):
+    monkeypatch.setattr(llm_client.settings, "llm_provider", "ollama")
+
+
 # 1. Ollama 호출 및 응답 검증
 def test_generate_response(monkeypatch):
     mock_client = MagicMock()
@@ -23,8 +28,10 @@ def test_generate_response(monkeypatch):
 
     assert response == "아직 확인되지 않았습니다."
 
-    mock_client_class.assert_called_once_with(host=llm_client.settings.ollama_base_url)
-
+    mock_client_class.assert_called_once_with(
+        host=llm_client.settings.ollama_base_url,
+        timeout=120,
+    )
     mock_client.chat.assert_called_once_with(
         model="qwen3:8b",
         messages=[
@@ -38,6 +45,7 @@ def test_generate_response(monkeypatch):
             },
         ],
         think=False,
+        keep_alive="15m",  # 추가
         options={"temperature": 0.2},
     )
 

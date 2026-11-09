@@ -95,7 +95,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
   endingError: null,
   evidence: {},
   toasts: [],
-  final: loadFinal(),
+  // 실제 HTTP 모드의 결과는 브라우저 저장값이 아닌 서버 /ending에서 복구합니다.
+  final: apiMode === 'http' ? null : loadFinal(),
 
   // ISSUE65_ENDING_INTEGRATION_V1: single submission and server-authoritative ending.
   async accuse(suspectId, evidenceIds) {

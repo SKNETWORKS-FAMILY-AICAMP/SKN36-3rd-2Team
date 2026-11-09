@@ -55,6 +55,7 @@ def game(tmp_path):
     state = create_initial_state("issue29-service").model_copy(
         update={
             "phase": GamePhase.INVESTIGATION,
+            "unlocked_characters": ["C01", "C02", "C03"],
             "evidence": {
                 evidence_id: EvidenceState(stage="found")
                 for evidence_id in ("E01", "E02", "E03", "E04", "E05")

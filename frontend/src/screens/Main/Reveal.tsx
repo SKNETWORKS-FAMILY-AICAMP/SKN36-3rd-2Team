@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useReducedMotion } from 'framer-motion'
 import { GROUP_PHOTO } from '../../data/characters'
-import { GAME_TITLE } from '../../mock/publicData'
+import { GAME_TITLE } from '../../data/publicData'
 import styles from './Reveal.module.css'
 
 const GRID_W = 36

@@ -9,7 +9,6 @@ import Story from './screens/Story/Story'
 import Accuse from './screens/Accuse/Accuse'
 import Final from './screens/Final/Final'
 import Notes from './screens/Notes/Notes'
-import { apiMode } from './api/client'
 import NotesPanel from './components/NotesPanel'
 
 export default function App() {
@@ -18,7 +17,6 @@ export default function App() {
     <HashRouter>
       <AnimatedRoutes />
       <NotesPanel />
-      {apiMode === 'mock' && <div className="mode-badge" aria-hidden="true">시연용 데이터</div>}
       <div className="fx-grain" aria-hidden="true" />
       <div className="fx-vignette" aria-hidden="true" />
     </HashRouter>

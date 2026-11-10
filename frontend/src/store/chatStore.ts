@@ -1,6 +1,6 @@
 
 import { create } from 'zustand'
-import { api, apiMode } from '../api/client'
+import { api } from '../api/client'
 import { ApiHttpError } from '../api/httpApi'
 import type { Message } from '../api/types'
 import { useGameStore } from './gameStore'
@@ -127,7 +127,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
       const isConflict =
         error instanceof ApiHttpError && error.status === 409
 
-      const isHttp = apiMode === 'http'
+      const isHttp = true
       let recovered = false
 
       if (isHttp) {

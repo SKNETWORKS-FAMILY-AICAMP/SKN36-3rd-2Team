@@ -1,8 +1,8 @@
 import { create } from 'zustand'
-import { api, apiMode } from '../api/client'
+import { api } from '../api/client'
 import { ApiHttpError } from '../api/httpApi'
 import { isGameOver, type AccuseResponse, type EvidenceDetail, type GameEvent, type SessionState } from '../api/types'
-import { CASE_INTRO } from '../mock/publicData'
+import { CASE_INTRO } from '../data/publicData'
 import { npcName } from '../data/characters'
 import { useNoteStore } from './noteStore'
 import { useChatStore } from './chatStore'
@@ -42,15 +42,6 @@ function loadLastAccusation(sessionId: string): LastAccusation | null {
 
 function saveFinal(record: FinalRecord) {
   try { localStorage.setItem(FINAL_KEY, JSON.stringify(record)) } catch { /* ignore */ }
-}
-function loadFinal(): FinalRecord | null {
-  try {
-    const raw = localStorage.getItem(FINAL_KEY)
-    if (!raw) return null
-    const record = JSON.parse(raw) as FinalRecord
-    const savedSessionId = localStorage.getItem(SID_KEY)
-    return record.sessionId && record.sessionId !== savedSessionId ? null : record
-  } catch { return null }
 }
 
 export interface Toast {
@@ -97,14 +88,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
   evidence: {},
   toasts: [],
   // 실제 HTTP 모드의 결과는 브라우저 저장값이 아닌 서버 /ending에서 복구합니다.
-  final: apiMode === 'http' ? null : loadFinal(),
+  final: null,
 
   // ISSUE65_ENDING_INTEGRATION_V1: single submission and server-authoritative ending.
   async accuse(suspectId, evidenceIds) {
     const session = get().session
     if (!session) throw new Error('세션이 없습니다.')
     if (get().accusing) throw new Error('지목 결과를 처리하고 있습니다.')
-    if (apiMode === 'http' && !session.canAccuse) throw new Error('아직 지목할 수 없습니다.')
+    if (!session.canAccuse) throw new Error('아직 지목할 수 없습니다.')
     set({ accusing: true, endingError: null })
     try {
       // A lost HTTP response can still mean the server committed the accusation.
@@ -141,7 +132,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   async recoverEnding(state) {
-    if (apiMode !== 'http' || state.phase !== 'FINISHED') return
+    if (state.phase !== 'FINISHED') return
     try {
       const ending = await api.getEnding(state.sessionId)
       const previous = get().final?.sessionId === state.sessionId ? get().final : null
@@ -242,7 +233,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
           // HTTP 세션이 없을 때(404)에만 새 게임을 생성합니다.
           // 네트워크 장애 및 서버 오류는 기존 세션 ID를 유지합니다.
           if (
-            apiMode === 'http' &&
             !(error instanceof ApiHttpError && error.status === 404)
           ) {
             throw error

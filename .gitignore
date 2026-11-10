@@ -82,4 +82,7 @@ backend/.local/
 
 
 # SQLite game persistence
-/backend/data/*.sqlite3*
+/backend/data/*.sqlite3*/backend/data/*.zip
+/data/*.sqlite3*
+/frontend/.vite/
+*.bak

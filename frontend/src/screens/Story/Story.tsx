@@ -5,7 +5,7 @@ import TopNav from '../../components/TopNav'
 import PosterScene from '../../components/PosterScene'
 import PlaceScene from '../../components/PlaceScene'
 import { useGameStore } from '../../store/gameStore'
-import { CASE_INTRO } from '../../mock/publicData'
+import { CASE_INTRO } from '../../data/publicData'
 import styles from './Story.module.css'
 
 const OPENING = [

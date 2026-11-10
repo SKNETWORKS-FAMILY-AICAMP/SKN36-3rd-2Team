@@ -48,14 +48,16 @@ async def chat_lifespan(app: FastAPI):
 
 load_dotenv(Path(__file__).resolve().parents[3] / ".env", override=False)
 
-repository = SQLiteCase001Repository(
-    Path(
-        os.getenv(
-            "CRIMESCENE_DB_PATH",
-            "data/game_state.sqlite3",
-        )
-    )
-)
+backend_root = Path(__file__).resolve().parents[3]
+
+db_path = Path(
+    os.getenv("CRIMESCENE_DB_PATH", "data/game_state.sqlite3")
+).expanduser()
+
+if not db_path.is_absolute():
+    db_path = backend_root / db_path
+
+repository = SQLiteCase001Repository(db_path.resolve())
 
 app = create_app(
     repository,

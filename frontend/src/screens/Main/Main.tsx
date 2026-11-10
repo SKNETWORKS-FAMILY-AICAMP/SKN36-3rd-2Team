@@ -5,7 +5,7 @@ import Reveal from './Reveal'
 import { ALBUM, GROUP_PHOTO } from '../../data/characters'
 import {
   ALBUM_TEXT, CASE_INTRO, PHOTO_CAPTION, TIMELINE_LINES,
-} from '../../mock/publicData'
+} from '../../data/publicData'
 import { useGameStore } from '../../store/gameStore'
 import { api } from '../../api/client'
 import styles from './Main.module.css'

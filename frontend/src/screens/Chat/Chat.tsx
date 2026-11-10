@@ -1,16 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Navigate, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import { FileSearch, Lock, NotebookPen, Send, X } from 'lucide-react'
 import TopNav from '../../components/TopNav'
 import Toasts from '../../components/Toasts'
 import CharacterPortrait from '../../components/CharacterPortrait'
-import { NPC_PUBLIC, npcName } from '../../data/characters'
+import { NPC_PUBLIC } from '../../data/characters'
 import { useGameStore } from '../../store/gameStore'
 import { useChatStore } from '../../store/chatStore'
 import { useNoteStore } from '../../store/noteStore'
-import { mockDebug } from '../../api/mockApi'
-import { api, apiMode } from '../../api/client'
+import { api } from '../../api/client'
 import type { AvailableEvidence } from '../../api/types'
 import styles from './Chat.module.css'
 
@@ -20,13 +19,10 @@ export default function Chat() {
   const { npcId } = useParams()
   const navigate = useNavigate()
   const { search } = useLocation()
-  const [params] = useSearchParams()
-  const debug = params.has('debug')
 
   const session = useGameStore((s) => s.session)
   const ensure = useGameStore((s) => s.ensureSession)
   const evidence = useGameStore((s) => s.evidence)
-  const refresh = useGameStore((s) => s.refresh)
 
   const messages = useChatStore((s) => (npcId ? s.messages[npcId] ?? EMPTY : EMPTY))
   const allMessages = useChatStore((s) => s.messages)
@@ -74,7 +70,7 @@ export default function Chat() {
   const activeNpcId = session?.activeCharacterId
   useEffect(() => {
     if (
-      apiMode !== 'http' || !sid || !npcId ||
+      !sid || !npcId ||
       session?.phase !== 'INVESTIGATION' || activeNpcId !== npcId
     ) {
       setAvailable([])
@@ -177,7 +173,7 @@ export default function Chat() {
             <span>{npc.title}</span>
             <em>{messages.length > 0 ? `이전 대화 ${messages.filter((m) => m.role === 'player').length}회` : '첫 대화'}</em>
           </header>
-          {apiMode === 'http' && (available.length > 0 || collectError) && (
+          {(available.length > 0 || collectError) && (
             <div className={styles.collectPanel} role="region" aria-label="확보 가능한 증거">
               {available.length > 0 && <strong>새로운 단서가 확인됐습니다</strong>}
               {available.map((item) => (
@@ -315,16 +311,7 @@ export default function Chat() {
         )}
       </AnimatePresence>
 
-      {debug && (
-        <div className={styles.debug}>
-          <strong>DEBUG</strong>
-          <button type="button" onClick={() => { mockDebug.unlockAll(); void refresh() }}>전원 해금</button>
-          <button type="button" onClick={() => { mockDebug.grantDemoEvidence(); void refresh() }}>증거 획득</button>
-          <button type="button" onClick={() => { mockDebug.grantAllEvidence(); void refresh() }}>증거 10칸</button>
-          <button type="button" onClick={() => { mockDebug.reset(); location.reload() }}>초기화</button>
-          <span>{session?.collection.score}/{session?.collection.total} · {npcName(npcId)}</span>
-        </div>
-      )}
+
     </div>
   )
 }

@@ -1,9 +1,8 @@
 
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { Lock, MessageCircle } from 'lucide-react'
 
-import { mockDebug } from '../../api/mockApi'
 import { api } from '../../api/client'
 import type { RelationGraph } from '../../api/types'
 
@@ -58,7 +57,6 @@ const hasBoardPosition = (id: string): boolean =>
 
 export default function Relations() {
   const navigate = useNavigate()
-  const [params] = useSearchParams()
 
   const session = useGameStore((s) => s.session)
   const ensure = useGameStore((s) => s.ensureSession)
@@ -174,24 +172,6 @@ export default function Relations() {
       tilt: 0,
     }
 
-  // 디버그 관계도 새로고침
-  const refreshDebugGraph = async () => {
-    if (!sid) return
-
-    mockDebug.stressEdges()
-
-    try {
-      const data = await api.getRelations(sid)
-      setGraph(data)
-      setError(null)
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : '관계도 갱신에 실패했습니다.',
-      )
-    }
-  }
 
   return (
     <div className={styles.page}>
@@ -407,26 +387,7 @@ export default function Relations() {
         </section>
 
         {/* 관계도 디버그 */}
-        {params.has('debug') && (
-          <button
-            type="button"
-            style={{
-              position: 'fixed',
-              left: 12,
-              bottom: 12,
-              zIndex: 60,
-              font: '12px monospace',
-              color: '#4a8f8a',
-              background: '#000c',
-              border: '1px dashed #4a8f8a',
-            }}
-            onClick={() => {
-              void refreshDebugGraph()
-            }}
-          >
-            DEBUG 관계선 많이
-          </button>
-        )}
+
 
         {/* 선택 인물 상세 */}
         <aside

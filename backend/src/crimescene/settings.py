@@ -36,5 +36,7 @@ class Settings(BaseSettings):
     neo4j_user: str = "neo4j"
     neo4j_password: SecretStr = SecretStr("")
 
+    crimescene_case001_root: Path = Path(".local/case001_v7_1")
+
 
 settings = Settings()

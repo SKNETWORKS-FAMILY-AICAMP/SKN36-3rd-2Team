@@ -1,8 +1,26 @@
 from collections.abc import Iterable, Mapping
 
 from crimescene.scenario.schemas.access_policy import AccessPolicy
-from crimescene.scenario.schemas.game_state import GameState
+from crimescene.scenario.schemas.game_state import GamePhase, GameState
 
+
+def matches_ending_requirement(
+    required_ending: str | None,
+    state: GameState,
+) -> bool:
+    if required_ending is None:
+        return True
+
+    if state.phase != GamePhase.FINISHED:
+        return False
+
+    if required_ending == "DEEP":
+        return (
+            state.outcome == "SUCCESS"
+            and state.deep_eligible is True
+        )
+
+    return state.outcome == required_ending
 
 class PolicyEvaluator:
     """CASE-001 접근 정책 판정 엔진.
@@ -87,4 +105,4 @@ class PolicyEvaluator:
 
         # 8. 엔딩 조건 확인
         # 엔딩 조건이 없거나, 현재 엔딩과 일치해야 허용
-        return policy.required_ending is None or state.outcome == policy.required_ending
+        return matches_ending_requirement(policy.required_ending, state)

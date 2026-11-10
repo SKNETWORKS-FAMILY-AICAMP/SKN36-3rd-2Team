@@ -2,7 +2,10 @@ from collections.abc import Iterable
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from crimescene.scenario.policy_evaluator import PolicyEvaluator
+from crimescene.scenario.policy_evaluator import (
+    PolicyEvaluator,
+    matches_ending_requirement,
+)
 from crimescene.scenario.schemas.document import PlayerDocument
 from crimescene.scenario.schemas.game_state import GameState
 
@@ -65,10 +68,7 @@ def select_authorized_player_documents(
             continue
 
         # 6. 문서별 엔딩 조건 검사
-        if (
-            document.required_ending is not None
-            and document.required_ending != state.outcome
-        ):
+        if not matches_ending_requirement(document.required_ending, state):
             continue
 
         # 7. 문서별 증거 제시 조건 검사

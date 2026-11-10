@@ -165,11 +165,14 @@ def load_chat_runtime() -> Iterator[ChatRuntime]:
     ):
         raise ValueError("backend/.env 또는 환경변수에 OPENAI_API_KEY를 설정하세요.")
 
-    root = (
-        Path(os.getenv("CRIMESCENE_CASE001_ROOT", str(DEFAULT_DATA_ROOT)))
-        .expanduser()
-        .resolve()
-    )
+    root = Path(
+        os.getenv("CRIMESCENE_CASE001_ROOT", str(settings.crimescene_case001_root))
+    ).expanduser()
+
+    if not root.is_absolute():
+        root = PROJECT_ROOT / root
+
+    root = root.resolve()
     data_dir = _locate_data_dir(root)
 
     personas = load_npc_personas(data_dir / "characters.json")

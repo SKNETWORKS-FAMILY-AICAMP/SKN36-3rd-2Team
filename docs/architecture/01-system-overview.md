@@ -1,201 +1,415 @@
-# AI 크라임씬 시스템 아키텍처 설계
+# CASE-001 — 시스템 아키텍처 개요
 
 ## 1. 프로젝트 개요
 
-### 프로젝트명
-AI 크라임씬 — 《마지막 기록: 사라진 공동체》
+**《마지막 기록: 사라진 공동체》**는 LLM과 Hybrid RAG를 기반으로 하는 AI 대화형 추리 게임입니다.
 
-### 개발 목적
-LLM과 Hybrid RAG를 활용하여 플레이어가 AI 인물 10명과 대화하고, 사건 관련 문서와 증거를 수집하여 범인을 추리하는 대화형 추리 게임을 개발한다.
+플레이어는 사건 관계자 10명과 직접 대화하고, 진술과 증거를 수집하며, 인물 간 관계를 조사하여 사건의 진실을 추리합니다.
+
+일반적인 선택지 기반 추리 게임과 달리 자연어로 질문할 수 있습니다. 단, AI가 사건의 진실을 임의로 생성하지 않도록 정해진 사건 데이터, NPC별 지식 범위, 게임 진행 규칙을 적용합니다.
 
 ### 핵심 기능
-- AI 인물 10명과 자연어 대화
-- Hybrid RAG 기반 사건 정보 검색
-- 인물 관계 및 사건 연관성 탐색
-- 증거 수집 및 보관
-- 인물 및 비공개 정보 해금
-- 진술 비교 및 추리 기록
-- 범인 지목 및 사건 판정
 
-## 2. 전체 시스템 구성
+- NPC 10명과 자연어 기반 자유 대화
+- NPC별 페르소나 및 대화 기록 관리
+- Dense Search + BM25 + Graph Retrieval 기반 Hybrid RAG
+- 게임 상태에 따른 정보 접근 제한
+- 증거 10개 수집 및 21점 진행률 관리
+- 수집 조건에 따른 NPC 해금
+- 인물 관계 및 증거 보관함 조회
+- 최대 3회 범인 지목 및 엔딩 판정
+- SQLite 기반 게임 상태 저장 및 복원
 
-본 시스템은 Presentation, Application, AI, Data 계층으로 구분한다.
+---
 
-| 계층 | 구성 요소 | 역할 |
+## 2. 기술 스택
+
+| 영역 | 기술 | 목적 |
 |---|---|---|
-| Presentation | Streamlit | 사용자 인터페이스 |
-| Application | Game Engine | 게임 진행 및 상태 관리 |
-| Application | NPC Chat | AI 인물 대화 관리 |
-| Application | Trigger Engine | 정보 공개 및 해금 조건 검사 |
-| Application | Advisor | 추리 보조 기능 |
-| AI | Ollama | LLM 추론 및 답변 생성 |
-| AI | Hybrid Retriever | 통합 문서 검색 |
-| Data | Qdrant | 벡터 데이터 검색 |
-| Data | BM25 Index | 키워드 검색 |
-| Data | Neo4j | 인물 및 사건 관계 검색 |
-| Data | Scenario Documents | 사건 원본 데이터 |
+| Frontend | React 18, TypeScript, Vite | 게임 UI |
+| UI | React Router, Zustand, Framer Motion | 화면 이동, 상태 관리, 연출 |
+| Backend | Python 3.13+, FastAPI, Uvicorn | 게임 API 및 비즈니스 로직 |
+| LLM | Ollama, Qwen3 8B | NPC 응답 생성 |
+| 선택적 LLM | OpenAI API | 대체 응답 생성 공급자 |
+| Embedding | BGE-M3 | 1024차원 임베딩 |
+| Vector DB | Qdrant | Dense 및 Sparse 검색 |
+| Keyword Search | Kiwi, BM25 | 한국어 키워드 검색 |
+| Graph DB | Neo4j | 인물·사건·증거 관계 검색 |
+| Game DB | SQLite | 게임 상태 및 대화 기록 |
+| Validation | Pydantic | 데이터·상태 검증 |
+| Infrastructure | Docker Compose | Qdrant·Neo4j 실행 |
+| Testing | pytest, Ruff | 자동화 테스트 및 정적 검사 |
 
-## 3. Backend 모듈 정의
+현재 구현은 React + FastAPI를 사용합니다. 이전 개발 계획에 포함된 Streamlit과 Django는 현재 실행 아키텍처가 아닙니다.
 
-### 3.1 ingest
+---
 
-**역할:** 사건 관련 문서를 수집하고 검색 가능한 형태로 전처리한다.
+## 3. 전체 시스템 아키텍처
+
+```mermaid
+flowchart TB
+    USER["플레이어"]
+    UI["React + TypeScript UI"]
+    API["FastAPI Game API"]
+
+    subgraph GAME["게임 처리 계층"]
+        STATE["GameState / 진행 규칙"]
+        TRIGGER["NPC 대화 및 증거 트리거"]
+        POLICY["정보 접근 정책"]
+        CHAT["NPC Chat / Persona"]
+    end
+
+    subgraph RAG["Hybrid RAG"]
+        DENSE["Dense Search"]
+        SPARSE["BM25 Sparse Search"]
+        GRAPH["Graph Retrieval"]
+        FUSION["RRF / 컨텍스트 구성"]
+        GUARD["접근 권한 및 응답 근거 검증"]
+    end
+
+    subgraph AI["AI 추론"]
+        EMBED["Ollama BGE-M3"]
+        LLM["Ollama / 선택적 OpenAI"]
+    end
+
+    subgraph STORAGE["데이터 저장소"]
+        SQLITE[("SQLite")]
+        QDRANT[("Qdrant")]
+        NEO4J[("Neo4j")]
+        SOURCE["로컬 CASE-001 시나리오"]
+        TRUTH["서버 전용 사건 정답 원장"]
+    end
+
+    USER <--> UI
+    UI <--> API
+    API <--> STATE
+    API <--> TRIGGER
+
+    STATE <--> SQLITE
+    TRIGGER <--> CHAT
+    CHAT --> POLICY
+    POLICY --> DENSE
+    POLICY --> SPARSE
+    POLICY --> GRAPH
+
+    DENSE <--> EMBED
+    DENSE <--> QDRANT
+    SPARSE <--> QDRANT
+    GRAPH <--> NEO4J
+
+    DENSE --> FUSION
+    SPARSE --> FUSION
+    GRAPH --> FUSION
+    FUSION --> GUARD
+    GUARD --> LLM
+    LLM --> CHAT
+
+    CHAT --> TRIGGER
+    TRIGGER --> STATE
+    STATE -. "범인 지목 시 판정" .-> TRUTH
+
+    SOURCE -. "서버 시작 시 로딩" .-> CHAT
+    SOURCE -. "적재 파이프라인" .-> QDRANT
+    SOURCE -. "적재 파이프라인" .-> NEO4J
+```
+
+### 아키텍처 특징
+
+1. UI, 게임 엔진, 검색 시스템의 책임을 분리합니다.
+2. LLM은 NPC 대화를 생성하며 게임 판정은 수행하지 않습니다.
+3. RAG 검색 전후에 접근 권한을 검증합니다.
+4. 게임 상태 변경은 SQLite에 저장합니다.
+5. 비공개 사건 정답 원장은 일반 검색 컨텍스트와 분리합니다.
+
+---
+
+## 4. 주요 소프트웨어 계층
+
+### 4.1 Presentation Layer
+
+경로: `frontend/src/`
+
+React 기반 웹 게임 화면을 담당합니다.
 
 주요 기능:
-- PDF, Markdown, JSON 등 문서 파싱
-- 텍스트 정제 및 청킹
-- 문서 메타데이터 생성
+
+- 게임 시작 및 이어하기
+- 사건 프롤로그와 장면 연출
+- NPC 대화
+- 증거 수첩 및 관계도
+- 범인 지목 및 엔딩
+- 서버 이벤트 기반 화면 갱신
+
+프론트엔드는 서버에서 반환한 상태를 표시하고 사용자 행동을 API에 전달합니다.
+
+### 4.2 API Layer
+
+경로: `backend/src/crimescene/api/`
+
+FastAPI가 사용자 요청을 수신합니다.
+
+담당 기능:
+
+- 세션 생성 및 소유권 확인
+- 저장된 GameState 조회
+- NPC 대화 요청 처리
+- 증거 수집과 관계도 조회
+- 지목 요청 및 엔딩 조회
+- 요청 형식 및 권한 검증
+
+주요 파일:
+
+- `app.py`
+- `main.py`
+- `chat_bootstrap.py`
+
+### 4.3 Game Logic Layer
+
+주요 경로:
+
+- `backend/src/crimescene/scenario/`
+- `backend/src/crimescene/trigger/`
+
+담당 기능:
+
+- 게임 단계 전환
+- 증거 획득 조건 검증
+- NPC 해금
+- 플래그 및 공개 지식 카드 관리
+- 증거 제시 처리
+- 범인 지목 가능 여부 검증
+- 사건 결과 판정
+
+게임 규칙은 Python 코드로 결정적으로 처리합니다.
+
+### 4.4 NPC Chat Layer
+
+경로: `backend/src/crimescene/chat/`
+
+담당 기능:
+
+- NPC 10명 페르소나 적용
+- NPC별 대화 세션 관리
+- 이전 대화 기록 활용
+- LLM 응답 생성
+- 근거 기반 대화 처리
+- 게임 상황에 따른 응답 조정
+
+NPC마다 허용된 정보 범위가 다르므로 게임 상태와 접근 정책을 함께 확인합니다.
+
+### 4.5 Retrieval Layer
+
+경로: `backend/src/crimescene/retriever/`
+
+담당 기능:
+
+- Dense 벡터 검색
+- BM25 Sparse 검색
+- Neo4j 그래프 검색
+- RRF 기반 검색 결과 통합
+- 검색 전 접근 권한 검사
+- 검색 결과 컨텍스트 검증
+- 생성된 NPC 답변의 근거 검증
+
+### 4.6 Data Processing Layer
+
+주요 경로:
+
+- `backend/src/crimescene/ingest/`
+- `backend/src/crimescene/db/`
+
+담당 기능:
+
+- CASE-001 문서 로딩
+- 의미 기반 및 고정 길이 청킹
 - 임베딩 생성
-- Vector DB 및 Graph DB 데이터 적재
+- Qdrant 적재
+- Neo4j 엔티티 및 관계 적재
+- 데이터 무결성 및 동기화 확인
 
-### 3.2 retriever
+---
 
-**역할:** 사용자 질문과 관련된 사건 정보를 검색한다.
+## 5. 데이터베이스 구성
 
-주요 기능:
-- Qdrant Semantic Search
-- BM25 Keyword Search
-- Neo4j Graph Retrieval
-- 검색 결과 통합 및 재순위화
-- 인물별 접근 권한 필터링
-- 검색 결과 출처 관리
-
-### 3.3 chat
-
-**역할:** 등장인물 10명의 AI 대화를 관리한다.
-
-주요 기능:
-- 인물별 시스템 프롬프트 적용
-- Ollama LLM 호출
-- 인물별 지식 및 말투 적용
-- 대화 기록 관리
-- RAG 검색 결과 기반 답변 생성
-
-### 3.4 trigger
-
-**역할:** 플레이어의 행동에 따른 정보 공개 조건을 검사한다.
-
-주요 기능:
-- 특정 질문 및 증거 제시 감지
-- 정보 공개 조건 검증
-- 해금 이벤트 생성
-- NPC 대화 변화 조건 관리
-
-### 3.5 engine
-
-**역할:** 게임 진행 상태와 규칙을 관리한다.
-
-주요 기능:
-- 플레이어 진행 상태 관리
-- 증거 수집 및 수집률 계산
-- 인물 해금 상태 관리
-- 범인 지목 기회 관리
-- 정답 판정
-- 게임 저장 및 불러오기
-
-### 3.6 advisor
-
-**역할:** 플레이어의 추리 활동을 보조한다.
-
-주요 기능:
-- 수집한 증거 정리
-- 인물별 진술 비교
-- 사건 타임라인 제공
-- 추리 기록 관리
-
-## 4. 데이터베이스 역할
+| 저장소 | 주요 데이터 | 역할 |
+|---|---|---|
+| Qdrant | 임베딩, 청크, 검색 메타데이터 | 사건 정보 검색 |
+| Neo4j | 사건 엔티티, 관계 및 이벤트 | 그래프 관계 탐색 |
+| SQLite | GameState, NPC 선택, 대화 기록 | 게임 상태 저장 |
+| 로컬 JSON·JSONL | 원본 문서, 지식 카드, 정책 | 시나리오 기준 데이터 |
 
 ### Qdrant
-사건 기록, 인물 진술, 증거 문서의 임베딩을 저장하고 의미 기반 검색을 수행한다.
 
-### BM25
-질문에 포함된 인물명, 장소, 시간, 사건 관련 키워드를 기반으로 관련 문서를 검색한다.
+컬렉션: `case001_rag_v1`
+
+- Dense Vector: `dense`, 1024차원
+- Sparse Vector: `bm25`
+- Dense 유사도: Cosine
+- Sparse IDF 적용
 
 ### Neo4j
-인물, 사건, 장소, 증거 간의 관계를 그래프 형태로 저장하고 연결 정보를 탐색한다.
 
-### 게임 상태 저장소
-플레이어의 증거 수집, 대화 이력, 인물 해금, 지목 횟수 등을 관리한다.
+주요 구성 요소:
 
-초기 구현에서는 JSON 또는 SQLite를 활용할 수 있으며, 이후 Django 도입 시 영속 저장소를 확장할 수 있도록 설계한다.
+- `CaseEntity`
+- `CASE_RELATION`
+- `AdminEvent`
+- `AdminEntity`
+- `ADMIN_MENTIONS`
 
-## 5. 핵심 설계 원칙
+관리자 전용 사건 정보는 일반 플레이어 접근 정책과 구분합니다.
 
-### 5.1 관심사 분리
-프론트엔드, AI 검색, 게임 규칙을 독립적인 모듈로 구성한다.
+### SQLite
 
-### 5.2 RAG 기반 답변
-NPC는 설정된 사건 데이터와 검색된 문서를 근거로 답변한다.
+핵심 테이블:
 
-### 5.3 정보 접근 제어
-게임 상태 및 NPC별 접근 권한을 확인한 후 허용된 문서만 LLM에 전달한다.
+- `npc_sessions`
+- `npc_exchanges`
+- `game_states`
 
-### 5.4 게임 판정의 결정성
-증거 획득, 인물 해금, 지목 기회, 정답 판정은 Python 코드로 처리한다.
+GameState는 JSON으로 직렬화하여 저장하며, `revision`으로 동시 상태 변경을 검증합니다.
 
-### 5.5 확장성
-1차에서는 Streamlit을 사용하며, 향후 Django 기반 API 계층을 추가하더라도 핵심 AI 및 게임 로직을 재사용할 수 있도록 설계한다.
+---
 
-## 6. 단계별 개발 및 서비스 확장 계획
+## 6. CASE-001 데이터 구성
 
-### 6.1 3차 프로젝트 — AI 크라임씬 MVP
+실제 CASE-001 데이터 로더에서 검증하는 데이터 수량입니다.
 
-**목표:** LLM + Hybrid RAG 기반 추리 게임의 핵심 기능 구현 및 시연
+| 데이터 | 수량 |
+|---|---:|
+| 등장인물 | 10명 |
+| 플레이어 문서 | 28개 |
+| NPC 지식 카드 | 88개 |
+| 접근 정책 | 153개 |
+| RAG 청크 | 116개 |
+| 증거 규칙 | 10개 |
+| 신뢰 관계 데이터 | 37개 |
 
-**기술 스택**
-- Frontend: Streamlit
-- Backend: Python
-- LLM: Ollama
-- Vector DB: Qdrant
-- Graph DB: Neo4j
-- Keyword Search: BM25
-- Testing: pytest
+이 데이터는 사건 설정과 NPC별 지식 범위를 구성하는 데 사용됩니다.
 
-**주요 구현 기능**
-- 등장인물 10명과 AI 대화
-- 인물별 성격 및 진술 유지
-- Hybrid RAG 기반 사건 문서 검색
-- 증거 수집 및 보관함
-- 조건별 인물 및 정보 해금
-- 인물 진술 비교
-- 범인 지목 및 사건 판정
+관리자 전용 원본과 사건 정답 파일은 공개 저장소에 포함하지 않습니다.
 
-**완료 기준**
+---
 
-Streamlit 웹 화면에서 플레이어가 NPC와 대화하고, 증거를 수집한 뒤 범인을 지목하는 핵심 게임 흐름을 시연할 수 있어야 한다.
+## 7. 게임 상태 관리
 
-### 6.2 4차 프로젝트 — 게임 서비스 고도화
+### GameState
 
-**목표:** 3차에서 구현한 AI 추리 엔진을 재사용하여 웹 게임 서비스로 확장
+주요 상태 필드:
 
-**주요 개발 방향**
-- Django 기반 Backend 구축
-- React 기반 게임 UI 도입 검토
-- 사용자 인증 및 계정 관리
-- 게임 진행 상태 및 세이브 데이터 관리
-- 게임 화면 및 사용자 경험 개선
-- 신규 사건 및 에피소드 확장
-- 서비스 운영 및 배포 환경 구축
+| 필드 | 설명 |
+|---|---|
+| `session_id` | 게임 세션 |
+| `phase` | 현재 진행 단계 |
+| `unlocked_characters` | 해금된 NPC |
+| `evidence` | 수집 증거 |
+| `presented` | 증거 제시 기록 |
+| `disclosed_cards` | 공개된 지식 카드 |
+| `flags` | 게임 진행 플래그 |
+| `score` | 수집 점수 |
+| `attempts_left` | 남은 지목 기회 |
+| `outcome` | 게임 결과 |
+| `revision` | 상태 변경 버전 |
 
-### 6.3 최종 목표 — Steam 게임 출시
+### 진행 단계
 
-**목표:** AI NPC와 자유롭게 대화하며 사건을 해결하는 PC 추리 게임 출시
+```text
+PROLOGUE
+    ↓
+INVESTIGATION
+    ↓
+ACCUSATION
+    ↓
+FINISHED
+```
 
-**주요 개발 방향**
-- 데스크톱 게임 클라이언트 개발
-- 게임 화면, 연출 및 애니메이션 고도화
-- 에피소드 및 사건 시나리오 확장
-- 세이브 및 불러오기 기능 고도화
-- AI 추론 환경 및 운영 비용 최적화
-- 게임 패키징 및 Steamworks 연동
-- 배포 및 업데이트 체계 구축
+오답을 지목하고 기회가 남아 있으면 조사 단계로 돌아갈 수 있습니다.
 
-데스크톱 기술과 AI 실행 방식은 추후 성능, 비용, 배포 환경을 검토한 뒤 확정한다.
+### 핵심 규칙
 
-### 6.4 공통 설계 원칙
+- 초기 NPC: C01
+- 증거: E01~E10
+- 증거 총점: 21점
+- 지목 조건: 증거 5개 이상 및 11점 이상
+- 지목 기회: 최대 3회
+- 정답 판정: 서버 전용 사건 원장 기준
 
-3차에서 개발한 Hybrid RAG, NPC 대화, 게임 엔진은 UI 프레임워크와 독립적으로 구현한다.
+---
 
-Streamlit은 게임 화면을 담당하며, 핵심 AI 및 게임 로직은 Python Backend에서 처리한다.
+## 8. 보안 설계
 
-향후 Django와 데스크톱 클라이언트를 도입하더라도 핵심 모듈을 최대한 재사용할 수 있도록 설계한다.
+### 8.1 세션 소유권
+
+FastAPI는 서버가 생성한 세션 ID와 서명 기반 소유권 토큰을 사용합니다.
+
+세션 쿠키는 `HttpOnly`로 설정하며, 운영 HTTPS 환경에서는 `Secure` 쿠키를 사용해야 합니다.
+
+### 8.2 정보 접근 제어
+
+- 등록되지 않은 정책은 기본 거부합니다.
+- 해금되지 않은 NPC의 정보는 차단합니다.
+- 수집하지 않은 증거에 의존하는 정보는 차단합니다.
+- 관리자 전용 사건 원장은 일반 RAG 검색 대상에서 제외합니다.
+- 생성된 NPC 응답도 근거를 검증합니다.
+
+### 8.3 데이터 무결성
+
+- Pydantic 모델을 통한 입력값 검증
+- 서버 관리 GameState 사용
+- SQLite 트랜잭션 및 revision 검증
+- 중복 증거 수집의 멱등 처리
+- 종료된 게임의 잘못된 진행 요청 제한
+
+---
+
+## 9. 테스트 및 검증
+
+### RAG 평가
+
+Issue #32의 잠정 평가 결과입니다.
+
+| 지표 | Hybrid RAG |
+|---|---:|
+| Recall@5 | 1.0000 |
+| Recall@10 | 1.0000 |
+| MRR@10 | 1.0000 |
+| nDCG@10 | 0.9921 |
+
+평가 질문은 29개이며, Gold Label의 독립 검수가 완료되지 않은 잠정 결과입니다.
+
+검색 정확도 지표는 LLM 답변 정확도나 전체 게임 성공률을 의미하지 않습니다.
+
+### 게임 E2E 검증
+
+로컬 실제 데이터 기반 수동 테스트에서 다음 흐름을 확인했습니다.
+
+- 증거 10개 수집
+- NPC 10명 해금
+- 총점 21점
+- 범인 지목 성공·실패 경로
+- 지목 횟수 제한
+- 엔딩 접근 제어
+- SQLite 상태 복원
+
+Issue #33에서는 게임 진행 조건을 자동으로 확인하는 회귀 테스트 3개를 추가했습니다.
+
+---
+
+## 10. 향후 개선 사항
+
+- LLM 응답 속도 및 품질 개선
+- 다양한 질문에 대한 NPC 페르소나 일관성 평가 확대
+- RAG 평가 Gold Label 독립 검수
+- 심층 엔딩 자격 판정 및 실제 도달 경로 검증
+- 배포 환경의 인증·보안 설정 강화
+- 추가 사건 시나리오와 게임 플랫폼 확장
+
+---
+
+## 11. 관련 문서
+
+- [시스템 처리 흐름](./02-system-flow.md)
+- [모듈 인터페이스](./03-module-interfaces.md)
+- [데이터 저장 구조](./04-data-storage.md)
+- [RAG 검색 평가](../reports/issue-32-rag-evaluation.md)
+- [프로젝트 README](../../README.md)

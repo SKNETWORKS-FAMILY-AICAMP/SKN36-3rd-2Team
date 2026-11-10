@@ -1,6 +1,9 @@
 """CASE-001 Qdrant + Neo4j 통합 검색 실행기."""
 
+import logging
+import os
 from collections.abc import Iterable, Mapping, Sequence
+from time import perf_counter
 
 from neo4j import Driver
 from qdrant_client import QdrantClient
@@ -26,6 +29,8 @@ from crimescene.scenario.schemas.game_state import GameState
 from crimescene.scenario.schemas.relationship import RelationshipSourceEdge
 
 CASE_ID = "CASE-001"
+
+logger = logging.getLogger(__name__)
 
 
 def _validate_limit(value: int, name: str) -> None:
@@ -130,6 +135,8 @@ def search_multisource_candidates(
     # 3. 접근 불가능한 엔티티 질문 사전 차단
     # --------------------------------------------------
 
+    search_started = perf_counter()
+
     try:
         extract_question_entities(
             query,
@@ -149,6 +156,9 @@ def search_multisource_candidates(
     # 4. Neo4j Graph Retrieval
     # --------------------------------------------------
 
+    presearch_ms = (perf_counter() - search_started) * 1000
+    graph_started = perf_counter()
+
     graph_context = retrieve_question_graph(
         query,
         driver=neo4j_driver,
@@ -166,6 +176,9 @@ def search_multisource_candidates(
     # 5. Qdrant Dense Search
     # --------------------------------------------------
 
+    graph_ms = (perf_counter() - graph_started) * 1000
+    dense_started = perf_counter()
+
     dense_results = search_dense_candidates(
         query,
         client=qdrant_client,
@@ -179,6 +192,9 @@ def search_multisource_candidates(
     # --------------------------------------------------
     # 6. Qdrant BM25 Search
     # --------------------------------------------------
+
+    dense_ms = (perf_counter() - dense_started) * 1000
+    bm25_started = perf_counter()
 
     sparse_results = search_sparse_candidates(
         query,
@@ -194,13 +210,20 @@ def search_multisource_candidates(
     # 7. Qdrant UUID 신뢰 원본 검증
     # --------------------------------------------------
 
+    bm25_ms = (perf_counter() - bm25_started) * 1000
+    validation_started = perf_counter()
+
     for candidate in (*dense_results, *sparse_results):
         if candidate.point_id not in trusted_ids:
             raise ValueError("신뢰할 수 없는 Qdrant 검색 후보 UUID입니다.")
 
+    validation_ms = (perf_counter() - validation_started) * 1000
+
     # --------------------------------------------------
     # 8. Dense + BM25 + Graph RRF 통합
     # --------------------------------------------------
+
+    rrf_started = perf_counter()
 
     fused = fuse_multisource_candidates(
         dense_results,
@@ -212,4 +235,24 @@ def search_multisource_candidates(
 
     # 권한 검증 전 Top-K를 적용하지 않는다.
     # 다음 단계에서 최종 권한 검증 후 Top-K 선정.
+    rrf_ms = (perf_counter() - rrf_started) * 1000
+
+    if os.getenv("CRIMESCENE_PERF_LOG", "").lower() in {"1", "true", "yes"}:
+        logger.warning(
+            "NPC_RAG_TIMING "
+            "presearch_ms=%.2f graph_ms=%.2f "
+            "dense_ms=%.2f bm25_ms=%.2f "
+            "validation_ms=%.2f rrf_ms=%.2f "
+            "total_ms=%.2f candidate_k=%d result_count=%d",
+            presearch_ms,
+            graph_ms,
+            dense_ms,
+            bm25_ms,
+            validation_ms,
+            rrf_ms,
+            (perf_counter() - search_started) * 1000,
+            candidate_k,
+            len(fused),
+        )
+
     return fused

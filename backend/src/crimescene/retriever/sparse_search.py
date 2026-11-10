@@ -1,7 +1,10 @@
 """Qdrant BM25 Sparse Vector 기반 검색 후보 조회."""
 
+import logging
 import math
+import os
 from dataclasses import dataclass
+from time import perf_counter
 from typing import Literal
 
 from qdrant_client import QdrantClient, models
@@ -11,6 +14,8 @@ from crimescene.db.qdrant_collection import (
     SPARSE_VECTOR_NAME,
 )
 from crimescene.retriever.korean_bm25 import KoreanBM25Encoder
+
+logger = logging.getLogger(__name__)
 
 SourceType = Literal[
     "player_document",
@@ -84,8 +89,12 @@ def search_sparse_candidates(
     elif character_id is not None:
         raise ValueError("플레이어 문서 검색에는 character_id를 지정할 수 없습니다.")
 
-    # 7. 한국어 질문을 BM25 Sparse Vector로 변환
+    # 7. BM25 Sparse Vector 인코딩 시간 측정
+    encode_started = perf_counter()
+
     query_vector = encoder.encode_query(query.strip())
+
+    encode_ms = (perf_counter() - encode_started) * 1000
 
     # 8. Sparse Vector 유효성 검증
     if not query_vector.indices:
@@ -120,7 +129,9 @@ def search_sparse_candidates(
 
     query_filter = models.Filter(must=conditions)
 
-    # 11. Qdrant BM25 검색
+    # 11. Qdrant BM25 검색 시간 측정
+    qdrant_started = perf_counter()
+
     response = client.query_points(
         collection_name=collection_name,
         query=query_vector,
@@ -130,6 +141,15 @@ def search_sparse_candidates(
         with_payload=False,
         with_vectors=False,
     )
+
+    qdrant_ms = (perf_counter() - qdrant_started) * 1000
+
+    if os.getenv("CRIMESCENE_PERF_LOG", "").lower() in {"1", "true", "yes"}:
+        logger.warning(
+            "NPC_BM25_TIMING encoding_ms=%.2f qdrant_ms=%.2f",
+            encode_ms,
+            qdrant_ms,
+        )
 
     # 12. 검색 결과 검증 및 변환
     candidates = []

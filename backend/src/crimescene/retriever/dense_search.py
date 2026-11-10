@@ -1,7 +1,10 @@
 """Qdrant Dense Vector 기반 RAG 검색 후보 조회."""
 
+import logging
 import math
+import os
 from dataclasses import dataclass
+from time import perf_counter
 from typing import Literal
 
 from qdrant_client import QdrantClient, models
@@ -12,6 +15,8 @@ from crimescene.db.qdrant_collection import (
     DENSE_VECTOR_SIZE,
 )
 from crimescene.ingest.ollama_embedder import OllamaEmbedder
+
+logger = logging.getLogger(__name__)
 
 SourceType = Literal[
     "player_document",
@@ -89,8 +94,12 @@ def search_dense_candidates(
     elif character_id is not None:
         raise ValueError("플레이어 문서 검색에는 character_id를 지정할 수 없습니다.")
 
-    # 7. 질문 임베딩 생성
+    # 7. 질문 임베딩 생성 시간 측정
+    embedding_started = perf_counter()
+
     query_vector = embedder.embed_query(query.strip())
+
+    embedding_ms = (perf_counter() - embedding_started) * 1000
 
     # 8. 벡터 차원 및 유효성 검증
     if len(query_vector) != DENSE_VECTOR_SIZE:
@@ -124,7 +133,9 @@ def search_dense_candidates(
 
     query_filter = models.Filter(must=conditions)
 
-    # 10. Dense Vector 검색
+    # 10. Qdrant Dense Vector 검색 시간 측정
+    qdrant_started = perf_counter()
+
     response = client.query_points(
         collection_name=collection_name,
         query=query_vector,
@@ -134,6 +145,15 @@ def search_dense_candidates(
         with_payload=False,
         with_vectors=False,
     )
+
+    qdrant_ms = (perf_counter() - qdrant_started) * 1000
+
+    if os.getenv("CRIMESCENE_PERF_LOG", "").lower() in {"1", "true", "yes"}:
+        logger.warning(
+            "NPC_DENSE_TIMING embedding_ms=%.2f qdrant_ms=%.2f",
+            embedding_ms,
+            qdrant_ms,
+        )
 
     # 11. 검색 결과를 안전한 내부 후보 모델로 변환
     candidates = []

@@ -71,7 +71,8 @@ export const npcTile = (id: string) =>
 export const npcPortrait = (id: string) => asset(`characters/${id}_calm.webp`)
 
 /** 관계도 보드의 핀 위치(%). 관계를 암시하지 않도록 고르게 흩어 둔 배치. */
-export const BOARD_POS: Record<CharacterId, { x: number; y: number; tilt: number }> = {
+export const BOARD_POS: Record<CharacterId | 'V01', { x: number; y: number; tilt: number }> = {
+  V01: { x: 50, y: 54, tilt: 0 },
   C01: { x: 14, y: 12, tilt: -3 },
   C02: { x: 38, y: 6, tilt: 2 },
   C03: { x: 64, y: 14, tilt: -2 },

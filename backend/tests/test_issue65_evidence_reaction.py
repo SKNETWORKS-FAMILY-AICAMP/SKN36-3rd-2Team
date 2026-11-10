@@ -80,3 +80,56 @@ def test_long_question_is_clamped_without_leaking_rules():
     assert evidence_id is None
     assert len(question) == 100
     assert "일정 수첩" in question
+
+def test_e01_presentation_targets_e04_question():
+    rules = {
+        "E01": SimpleNamespace(
+            name="신기범 일정표",
+            holder="C01",
+            presentation=[],
+            q=[],
+        ),
+        "E04": SimpleNamespace(
+            name="CCTV 기록",
+            holder="C04",
+            presentation=["C04:E01"],
+            q=["본관 CCTV 점검은 누가 지시했습니까?"],
+        ),
+    }
+
+    question, presented = resolve_evidence_reaction(
+        "이 증거에 대해 설명해 주세요.",
+        "E01",
+        active_npc="C04",
+        rules=rules,
+        authorized_recipients={
+            "E01": frozenset({"C04"}),
+        },
+    )
+
+    assert presented == "E01"
+    assert "본관 CCTV 점검은 누가 지시했습니까?" in question
+
+
+def test_unauthorized_npc_does_not_get_related_question():
+    rules = {
+        "E01": SimpleNamespace(name="신기범 일정표"),
+        "E04": SimpleNamespace(
+            holder="C04",
+            presentation=["C04:E01"],
+            q=["본관 CCTV 점검은 누가 지시했습니까?"],
+        ),
+    }
+
+    question, presented = resolve_evidence_reaction(
+        "이 증거에 대해 설명해 주세요.",
+        "E01",
+        active_npc="C03",
+        rules=rules,
+        authorized_recipients={
+            "E01": frozenset({"C04"}),
+        },
+    )
+
+    assert presented is None
+    assert "본관 CCTV 점검은 누가 지시했습니까?" not in question

@@ -343,3 +343,41 @@ def test_persist_verified_reply_after_restart(
     assert history[0].source_ids == (SOURCE_ID,)
 
     prepare_mock.assert_called_once()
+
+
+def test_different_question_does_not_repeat_same_reply(environment):
+    state, store, prepare_mock = environment
+    generate = lambda messages: valid_llm_output()
+
+    first = module.run_npc_chat(
+        QUESTION,
+        state=state,
+        session_store=store,
+        resources=None,
+        generate=generate,
+    )
+
+    assert first.reply.grounded is True
+
+    # 같은 NPC의 이전 대화 기록을 다음 요청에 전달합니다.
+    prepare_mock.return_value = NPCChatRAGResult(
+        character_id="C01",
+        history=store.get_history(state, "C01"),
+        reply_plan=make_plan(),
+    )
+
+    second = module.run_npc_chat(
+        "그 기록의 정확한 시각은 언제입니까?",
+        state=state,
+        session_store=store,
+        resources=None,
+        generate=generate,
+    )
+
+    assert second.reply.grounded is False
+    assert second.display_text == FALLBACK_REPLY
+    assert second.reply.source_ids == ()
+
+    history = store.get_history(state, "C01")
+    assert len(history) == 2
+    assert history[-1].npc_message == FALLBACK_REPLY

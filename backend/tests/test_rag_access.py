@@ -15,6 +15,7 @@ from crimescene.scenario.rag_access import (
 )
 from crimescene.scenario.schemas.game_state import (
     EvidenceState,
+    GamePhase,
     GameState,
 )
 
@@ -111,16 +112,26 @@ def _make_satisfied_state(policy, item, *, npc_id=None):
     state = GameState(
         case_id=_value(item, "case_id"),
         session_id="RAG-INTEGRATION-TEST",
+        phase=(
+            GamePhase.FINISHED
+            if endings
+            else GamePhase.INVESTIGATION
+        ),
         unlocked_characters=([character_id] if character_id else []),
         evidence={
-            evidence_id: EvidenceState(stage="found") for evidence_id in evidence_ids
+            evidence_id: EvidenceState(stage="found")
+            for evidence_id in evidence_ids
         },
         flags=sorted(requirements("required_flags")),
         presented=presented,
         attempts_left=3,
         score=0,
-        outcome=next(iter(endings), "ONGOING"),
-        deep_eligible=False,
+        outcome=(
+            "SUCCESS"
+            if "DEEP" in endings
+            else next(iter(endings), "ONGOING")
+        ),
+        deep_eligible="DEEP" in endings,
         revision=0,
         disclosed_cards=sorted(requirements("required_disclosed_cards")),
         document_grants=[],

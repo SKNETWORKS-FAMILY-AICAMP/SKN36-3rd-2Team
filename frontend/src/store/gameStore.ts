@@ -5,6 +5,7 @@ import { isGameOver, type AccuseResponse, type EvidenceDetail, type GameEvent, t
 import { CASE_INTRO } from '../mock/publicData'
 import { npcName } from '../data/characters'
 import { useNoteStore } from './noteStore'
+import { useChatStore } from './chatStore'
 
 const SID_KEY = 'serin-session-id'
 
@@ -181,14 +182,45 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   async startGame() {
-    if (get().session || get().starting) return
+    if (get().starting) {
+      throw new Error('이미 게임 생성 요청을 처리 중입니다.')
+    }
+
+    if (useChatStore.getState().typing !== null) {
+      throw new Error('NPC 응답 처리 중에는 새 게임을 시작할 수 없습니다.')
+    }
+
     set({ starting: true })
+
     try {
+      // 기존 세션이 있어도 반드시 새 서버 세션을 생성합니다.
       const { state, notes } = await api.createSession()
-      rememberSid(state.sessionId)
-      try { localStorage.removeItem(FINAL_KEY); localStorage.removeItem(LAST_ACCUSATION_KEY); localStorage.removeItem('serin-seen-places'); localStorage.removeItem('serin-story-beat') } catch { /* ignore */ }
+
+      // 세션 생성에 성공한 뒤 이전 게임 데이터 초기화
+      useChatStore.getState().clear()
       useNoteStore.getState().clear()
-      set({ session: state, notes, evidence: {}, toasts: [], final: null, endingError: null })
+      useChatStore.getState().clear()
+
+      try {
+        localStorage.removeItem(FINAL_KEY)
+        localStorage.removeItem(LAST_ACCUSATION_KEY)
+        localStorage.removeItem('serin-seen-places')
+        localStorage.removeItem('serin-story-beat')
+      } catch {
+        // 브라우저 저장소 접근 실패 시에도 메모리 초기화 진행
+      }
+
+      rememberSid(state.sessionId)
+
+      set({
+        session: state,
+        notes,
+        evidence: {},
+        toasts: [],
+        final: null,
+        endingError: null,
+        accusing: false,
+      })
     } finally {
       set({ starting: false })
     }

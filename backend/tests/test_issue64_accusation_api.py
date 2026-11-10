@@ -162,7 +162,7 @@ def test_accusation_commits_once(prepared_game):
     # 단계 전환과 오답 판정을 단일 커밋으로 처리
     assert after.revision == before.revision + 1
     assert after.attempts_left == 2
-    assert after.phase.value == "ACCUSATION"
+    assert after.phase.value == "INVESTIGATION"
 
 
 def test_concurrent_accusations_only_one_commits(prepared_game):
@@ -259,3 +259,34 @@ def test_failure_ending_hides_truth(prepared_game):
     assert ending["truth"] is None
     assert ending["game"]["attemptsLeft"] == 0
     assert ending["game"]["phase"] == "FINISHED"
+
+
+def test_wrong_accusation_allows_investigation_resume(prepared_game):
+    client, repository, session_id = prepared_game
+
+    before = repository.load_state(session_id)
+
+    # 첫 번째 오답 지목
+    response = accuse(client, session_id, "C02", before.revision)
+
+    assert response.status_code == 200
+    result = response.json()
+
+    assert result["result"] == "INCORRECT"
+    assert result["attemptsLeft"] == 2
+    assert result["game"]["phase"] == "INVESTIGATION"
+
+    # 오답 이후 다른 해금 NPC를 선택할 수 있어야 합니다.
+    selected = client.post(f"/api/games/{session_id}/characters/C02/select")
+
+    assert selected.status_code == 200, selected.text
+    assert selected.json()["activeCharacterId"] == "C02"
+
+    # 이어서 다시 지목할 수 있어야 합니다.
+    current = repository.load_state(session_id)
+    retry = accuse(client, session_id, "C03", current.revision)
+
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["result"] == "CORRECT"
+    assert retry.json()["game"]["phase"] == "FINISHED"
+    assert retry.json()["game"]["outcome"] == "SUCCESS"

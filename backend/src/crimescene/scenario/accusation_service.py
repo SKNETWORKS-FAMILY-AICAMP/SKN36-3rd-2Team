@@ -137,10 +137,18 @@ def submit_accusation_request_atomic(
         evidence_rules=evidence_rules,
     )
 
-    # 단계 전환과 판정을 하나의 상태 변경으로 합칩니다.
+    # 오답이면서 기회가 남았다면 조사를 재개합니다.
+    # 지목 판정과 단계 복귀를 하나의 SQLite 트랜잭션으로 저장합니다.
+    next_phase = (
+        GamePhase.INVESTIGATION
+        if (result.status == AccusationStatus.INCORRECT and result.attempts_left > 0)
+        else result.state.phase
+    )
+
     updated = GameState.model_validate(
         {
             **result.state.model_dump(mode="python"),
+            "phase": next_phase,
             "revision": original.revision + 1,
         }
     )

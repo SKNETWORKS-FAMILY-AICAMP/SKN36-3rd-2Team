@@ -226,6 +226,22 @@ def run_npc_chat(
             source_ids=(),
             grounded=False,
         )
+    # 다른 질문에 동일한 인용 답변을 반복하지 않도록 합니다.
+    # 새로운 사건 사실은 생성하지 않고 기존 검증된 fallback을 사용합니다.
+    if (
+        reply.grounded
+        and not evidence_just_presented
+        and any(
+            previous.npc_message == reply.text
+            and previous.user_message.strip() != query.strip()
+            for previous in rag_result.history[-4:]
+        )
+    ):
+        reply = NPCGroundedReply(
+            text=FALLBACK_REPLY,
+            source_ids=(),
+            grounded=False,
+        )
 
     # ==================================================
     # 3. GameState 및 NPC 선택 상태 재검증

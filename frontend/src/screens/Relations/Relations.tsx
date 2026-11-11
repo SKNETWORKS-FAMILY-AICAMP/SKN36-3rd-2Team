@@ -62,6 +62,7 @@ export default function Relations() {
   const ensure = useGameStore((s) => s.ensureSession)
 
   const [graph, setGraph] = useState<RelationGraph | null>(null)
+  const [showAll, setShowAll] = useState(false)
   const [sel, setSel] = useState<SelectedId | null>(null)
 
   const [hoverEdge, setHoverEdge] = useState<string | null>(null)
@@ -201,6 +202,7 @@ export default function Relations() {
                 {error}
               </p>
             )}
+          <button className="btn" type="button" aria-pressed={showAll} onClick={() => setShowAll(!showAll)}>전체 관계 확인</button>
           </header>
 
           <div className={styles.board}>
@@ -312,7 +314,7 @@ export default function Relations() {
                   top: `${BOARD_COORDS.V01.y}%`,
                   ['--tilt' as string]: '0deg',
                 }}
-                onClick={() => setSel(VICTIM_ID)}
+                onClick={() => { setShowAll(false); setSel(VICTIM_ID) }}
                 aria-label="신기범"
               >
                 <i
@@ -354,7 +356,7 @@ export default function Relations() {
                     ['--tilt' as string]:
                       `${pos.tilt}deg`,
                   }}
-                  onClick={() => setSel(npc.id)}
+                  onClick={() => { setShowAll(false); setSel(npc.id) }}
                   aria-label={
                     unlocked
                       ? npc.name
@@ -394,7 +396,11 @@ export default function Relations() {
           className={styles.side}
           aria-label="인물 정보"
         >
-          {!picked ? (
+          {showAll ? (
+            <section><h2>확인된 전체 관계</h2>
+              {edges.length ? <ul>{edges.map(edge => <li key={edge.id}>{npcName(edge.source)} · {npcName(edge.target)} — {edge.label}</li>)}</ul> : <p>아직 확인된 관계가 없습니다.</p>}
+            </section>
+          ) : !picked ? (
             <p className={styles.empty}>
               인물을 선택하면 간단한 프로필이
               표시됩니다.

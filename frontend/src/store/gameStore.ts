@@ -28,6 +28,7 @@ const SEEN_PLACES_KEY = 'serin-seen-places'
 // ============================================================
 
 export interface FinalRecord {
+  gaveUp?: boolean
   suspectId: string
   evidenceIds: string[]
   sessionId?: string
@@ -64,6 +65,7 @@ interface GameStore {
 
   final: FinalRecord | null
 
+  giveUp: (suspectId: string, response?: AccuseResponse) => void
   accuse: (
     suspectId: string,
     evidenceIds: string[],
@@ -197,6 +199,19 @@ export const useGameStore = create<GameStore>((set, get) => ({
   // 범인 지목
   // ==========================================================
 
+  giveUp(suspectId, previous) {
+    const { session, final, accusing } = get()
+    if (!session || final || accusing || session.phase === 'FINISHED') return
+    const response: AccuseResponse = {
+      result: previous?.result ?? 'NOT_ENOUGH_EVIDENCE',
+      attemptsLeft: session.attemptsLeft, gameOver: true,
+      ending: { title: '수사 종료', text: '남은 기회를 사용하지 않고 이번 조사를 마쳤습니다.' },
+    }
+    const record = { sessionId: session.sessionId, suspectId, evidenceIds: [...session.foundEvidence], response, gaveUp: true }
+    saveFinal(record)
+    set({ final: record })
+  },
+
   async accuse(suspectId, evidenceIds) {
     const session = get().session
 
@@ -325,7 +340,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         response: {
           result:
             ending.outcome === 'SUCCESS'
-              ? 'FULL'
+              ? ending.verdict ?? 'FULL'
               : 'WRONG',
 
           attemptsLeft: state.attemptsLeft,
@@ -342,6 +357,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
               : 'NORMAL',
 
           truth: ending.truth,
+          scene: ending.scene,
         },
       }
 
@@ -460,6 +476,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
       if (sid) {
         try {
           const state = await api.getState(sid)
+          try {
+            const saved = JSON.parse(localStorage.getItem(FINAL_KEY) ?? 'null')
+            if (state.phase !== 'FINISHED' && saved?.gaveUp && saved.sessionId === sid &&
+                ['NOT_ENOUGH_EVIDENCE','WRONG','ESTIMATED'].includes(saved.response?.result) && Array.isArray(saved.evidenceIds)) {
+              set({ final: saved })
+            }
+          } catch { /* stale local record */ }
 
           set({
             session: state,

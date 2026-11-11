@@ -1,4 +1,4 @@
-import { HashRouter, Route, Routes, useLocation } from 'react-router-dom'
+import { HashRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { AnimatePresence, MotionConfig, motion } from 'framer-motion'
 import Main from './screens/Main/Main'
 import Placeholder from './screens/Placeholder/Placeholder'
@@ -8,7 +8,13 @@ import Relations from './screens/Relations/Relations'
 import Story from './screens/Story/Story'
 import Accuse from './screens/Accuse/Accuse'
 import Final from './screens/Final/Final'
-import Notes from './screens/Notes/Notes'
+import { useEffect } from 'react'
+import { useNoteStore } from './store/noteStore'
+
+function OpenNotes() {
+  useEffect(() => useNoteStore.getState().setPanel(true), [])
+  return <Navigate to="/chat" replace />
+}
 import NotesPanel from './components/NotesPanel'
 
 export default function App() {
@@ -44,7 +50,7 @@ function AnimatedRoutes() {
         <Route path="/chat/:npcId" element={<Chat />} />
         <Route path="/evidence" element={<Evidence />} />
         <Route path="/relations" element={<Relations />} />
-        <Route path="/notes" element={<Notes />} />
+        <Route path="/notes" element={<OpenNotes />} />
         <Route path="/accuse" element={<Accuse />} />
         <Route path="/final" element={<Final />} />
         <Route path="*" element={<Placeholder title="찾을 수 없는 화면" />} />

@@ -5,11 +5,11 @@ interface Props {
   id: string
   alt: string
   className?: string
-  /** true면 입상 이미지를 시도하고, 없으면 앨범 타일로 대체 */
+  /** 기본 true: 2026 입상 사용, 없으면 앨범 타일로 대체. false면 2016 앨범 타일 */
   standing?: boolean
 }
 
-export default function CharacterPortrait({ id, alt, className, standing }: Props) {
+export default function CharacterPortrait({ id, alt, className, standing = true }: Props) {
   const primary = standing ? npcPortrait(id) : npcTile(id)
   const [src, setSrc] = useState(primary)
   useEffect(() => setSrc(primary), [primary])

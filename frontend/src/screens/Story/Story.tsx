@@ -7,6 +7,7 @@ import TopNav from '../../components/TopNav'
 import PosterScene from '../../components/PosterScene'
 import PlaceScene from '../../components/PlaceScene'
 import GameHelp from '../../components/GameHelp'
+import VisualNovelDialogue from '../../components/VisualNovelDialogue'
 
 import { useGameStore } from '../../store/gameStore'
 import { CASE_INTRO } from '../../data/publicData'
@@ -48,6 +49,31 @@ const OPENING = [
     scene: 'lobby',
     text:
       '10주년 동창회를 위해 준비된 구 본관. 낮에는 사람들의 목소리로 가득했을 공간이 밤이 되자 낯설게 느껴졌다.',
+  },
+  {
+    chapter: '동창회 · 다시 만난 사람들',
+    scene: 'lobby',
+    text: '윤태식: 이렇게 다시 모이게 됐군요. 다들 오랜만입니다.',
+  },
+  {
+    chapter: '동창회 · 낯익은 공간',
+    scene: 'lobby',
+    text: '장현우: 와, 이 건물 정말 그대로네요. 어제 졸업한 것 같은데요?',
+  },
+  {
+    chapter: '동창회 · 오래된 기억',
+    scene: 'lobby',
+    text: '박도현: 10년이나 지났는데 여긴 거의 변한 게 없네요.',
+  },
+  {
+    chapter: '동창회 · 불편한 공기',
+    scene: 'lobby',
+    text: '정유라: 그런데 분위기가 조금 이상하지 않아요?',
+  },
+  {
+    chapter: '동창회 · 갑작스러운 소리',
+    scene: 'lobby',
+    text: '최민석: ……방금 무슨 소리 들으셨습니까?',
   },
   {
     chapter: '사건 발생',
@@ -516,39 +542,19 @@ export default function Story() {
               transition={{ duration: 0.45 }}
               aria-label="사건 프롤로그"
             >
-              <p className={styles.place}>
-                {OPENING[beat].chapter}
-              </p>
-
-              <p className={styles.line}>
-                {OPENING[beat].text}
-              </p>
-
-              <div className={styles.storyControls}>
-                <span className={styles.storyProgress}>
-                  {String(beat + 1).padStart(2, '0')}
-                  {' / '}
-                  {String(OPENING.length).padStart(2, '0')}
-                </span>
-
-                <button
-                  type="button"
-                  className={styles.storySkip}
-                  onClick={skipIntro}
-                >
-                  건너뛰기
-                </button>
-
-                <button
-                  type="button"
-                  className={styles.go}
-                  onClick={next}
-                >
-                  {beat === OPENING.length - 1
+              <VisualNovelDialogue
+                key={`opening-novel-${beat}`}
+                chapter={OPENING[beat].chapter}
+                lines={[OPENING[beat].text]}
+                progress={`${String(beat + 1).padStart(2, '0')} / ${String(OPENING.length).padStart(2, '0')}`}
+                onNext={next}
+                onSkip={skipIntro}
+                nextLabel={
+                  beat === OPENING.length - 1
                     ? '현장 조사 시작'
-                    : '다음 장면 →'}
-                </button>
-              </div>
+                    : '다음 장면'
+                }
+              />
             </motion.section>
           ) : (
             // ==================================================

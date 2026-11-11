@@ -10,7 +10,7 @@ const GRID_H = 20
 const EMPHASIS_AT = 0.07
 
 /** 검은 막을 마우스로 지워 흐릿한 2016년 사진이 드러나는 시작 화면 */
-export default function Reveal({ onStart, onResume }: { onStart: () => void; onResume?: () => void }) {
+export default function Reveal({ onStart, onResume, seen, onGallery }: { seen: number; onGallery: () => void; onStart: () => void; onResume?: () => void }) {
   const reduce = useReducedMotion()
   const rootRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -167,6 +167,7 @@ export default function Reveal({ onStart, onResume }: { onStart: () => void; onR
           >
             {onResume ? '새로 시작' : 'START'}
           </button>
+          <button type="button" className={styles.start} onClick={onGallery}>엔딩 {seen} / 5</button>
           {onResume && (
             <button type="button" className={`${styles.start} ${styles.startOn}`} onClick={onResume}>
               이어하기

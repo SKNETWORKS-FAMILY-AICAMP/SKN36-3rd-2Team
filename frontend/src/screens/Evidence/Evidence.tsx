@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { FileText, Lock } from 'lucide-react'
 import TopNav from '../../components/TopNav'
 import Toasts from '../../components/Toasts'
+import { evidencePhoto } from '../../data/evidenceImages'
 import CharacterPortrait from '../../components/CharacterPortrait'
 import { EVIDENCE_SLOTS } from '../../data/publicData'
 import { npcName } from '../../data/characters'
@@ -25,6 +26,7 @@ export default function Evidence() {
   const loadEvidence = useGameStore((s) => s.loadEvidence)
   const [selected, setSelected] = useState<string | null>(null)
   const [docIdx, setDocIdx] = useState(0)
+  // 처음 들어올 때의 '새 증거' 목록을 기억해 NEW 표시를 하고, 내비게이션 점은 지운다
 
   useEffect(() => { void ensure() }, [ensure])
 
@@ -79,7 +81,9 @@ export default function Evidence() {
                     aria-label={has ? (d?.title ?? id) : '아직 확보하지 못한 증거'}
                   >
                     <span className={styles.no}>{id}</span>
-                    {has ? <FileText size={28} /> : <Lock size={24} />}
+                    {has && d && evidencePhoto(session?.sessionId, id) ? (
+                      <img className={styles.thumb} src={evidencePhoto(session?.sessionId, id)!.thumb} alt="" loading="lazy" draggable={false} />
+                    ) : has ? <FileText size={28} /> : <Lock size={24} />}
                     <span className={styles.name}>{has ? (d?.title ?? '불러오는 중…') : '잠김 · 인물과 대화해 단서 찾기'}</span>
                   </button>
                 </li>
@@ -127,6 +131,19 @@ export default function Evidence() {
                       </div>
                     )}
                     <h2 className="serif">{cur ? cur.title : detail.title}</h2>
+                    <p className={styles.chips} aria-label="증거 요약">
+                      <span>{detail.acquiredBy ? ROUTE_LABEL[detail.acquiredBy] : '서버 기록 미제공'}</span>
+                      <span>보유 · {npcName(detail.holderId)}</span>
+                    </p>
+                    {(() => {
+                      const ph = evidencePhoto(session?.sessionId, detail.id)
+                      return ph ? (
+                        <figure className={styles.prop}>
+                          <img src={ph.src} alt="" draggable={false} onError={(e) => { (e.currentTarget.parentElement as HTMLElement).style.display = 'none' }} />
+                          <figcaption>{ph.caption}</figcaption>
+                        </figure>
+                      ) : null
+                    })()}
                     <p className={styles.body}>{(cur ? cur.body : detail.body) ?? "증거 원문은 아직 서버에서 제공되지 않았습니다."}</p>
                   </>
                 )
@@ -141,7 +158,7 @@ export default function Evidence() {
                     </button>
                   </dd>
                 </div>
-                <div><dt>획득 경로</dt><dd>{detail.acquiredBy ? ROUTE_LABEL[detail.acquiredBy] : "서버 기록 미제공"}</dd></div>
+                <div><dt>획득 경로</dt><dd>{detail.acquiredBy ? ROUTE_LABEL[detail.acquiredBy] : '서버 기록 미제공'}</dd></div>
                 <div>
                   <dt>확인된 관계</dt>
                   <dd>

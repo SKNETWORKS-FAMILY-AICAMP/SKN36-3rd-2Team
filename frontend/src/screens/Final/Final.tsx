@@ -2,12 +2,15 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
 import {
-  AnimatePresence,
   motion,
   useReducedMotion,
 } from 'framer-motion'
 
+import { cardPath, defaultScene } from '../../data/endingScenes'
+import { endingKeyOf, recordEnding, saveEndingScene } from '../../data/endings'
+import { EVIDENCE_SLOTS } from '../../data/publicData'
 import CharacterPortrait from '../../components/CharacterPortrait'
+import VisualNovelDialogue from '../../components/VisualNovelDialogue'
 import { npcName } from '../../data/characters'
 import {
   useGameStore,
@@ -119,6 +122,9 @@ function buildEndingScenes(
   const firstEvidence = evidenceNames.slice(0, 3)
   const remainingEvidence = evidenceNames.slice(3)
 
+  if (final.gaveUp && response.result === 'NOT_ENOUGH_EVIDENCE') {
+    return [{ chapter: 'FINAL · 수사 종료', title: '남겨진 단서', lines: defaultScene('NO_EVIDENCE', suspectId).map(line => line.text) }]
+  }
   const scenes: EndingScene[] = [
     {
       chapter: 'FINAL CHAPTER · 마지막 지목',
@@ -138,7 +144,7 @@ function buildEndingScenes(
         '그러나 조사를 이어갈수록 작은 단서들이 하나씩 기록에 남았다.',
         firstEvidence.length > 0
           ? firstEvidence.join(' · ')
-          : '마지막 지목에 제출한 증거 목록은 기록되지 않았다.',
+          : '확보한 단서들은 사건 기록에 남아 있다.',
         '각각의 기록은 그날 밤을 다시 바라보게 만들었다.',
       ],
     },
@@ -168,6 +174,18 @@ function buildEndingScenes(
 
   // 실제 판정은 서버가 제공한 결과만 사용합니다.
   if (response.result === 'FULL') {
+    scenes.push({
+      chapter: 'FINAL · 진실 앞에서',
+      title: '마지막 대화',
+      lines: [
+        '박도현: 기록을 다시 확인했습니다. 이제 결론을 내릴 때가 됐군요.',
+        '정유라: 모두가 같은 이야기를 한 건 아니었죠.',
+        `${suspectName}: ……`,
+        '윤태식: 더는 미룰 수 없습니다. 사실대로 기록해야 합니다.',
+        '그 말을 끝으로, 사람들은 한동안 침묵했다.',
+      ],
+    })
+
     scenes.push({
       chapter: 'VERDICT · 사건 해결',
       title: '하나의 결론에 도달했다',
@@ -235,6 +253,17 @@ function buildEndingScenes(
       },
     )
   } else {
+    scenes.push({
+      chapter: 'FINAL · 미해결',
+      title: '대답하지 못한 밤',
+      lines: [
+        '장현우: 그러면 사건은 어떻게 되는 겁니까?',
+        '정유라: 아직 설명할 수 없는 일이 너무 많아요.',
+        '윤태식: 기록은 그대로 남겨 두겠습니다.',
+        '누구도 마지막 질문에 대답하지 못했다.',
+      ],
+    })
+
     scenes.push(
       {
         chapter: 'VERDICT · 지목 실패',
@@ -257,6 +286,11 @@ function buildEndingScenes(
     )
   }
 
+  const dialogue = response.scene?.length ? response.scene : defaultScene(endingKeyOf(response), suspectId || '관계자').filter(line => !line.card)
+  if (dialogue?.length) {
+    scenes.push({ chapter: 'EPILOGUE', title: '마지막 증언', lines: dialogue.map(line =>
+      line.speaker === 'narration' ? line.text : (npcName(line.speaker) || line.speaker) + ': ' + line.text) })
+  }
   return scenes
 }
 
@@ -308,6 +342,14 @@ export default function Final() {
     setStep(loadEndingStep(sessionId, scenes.length))
     setRestoredSession(sessionId)
   }, [final?.sessionId, sessionId, scenes.length])
+
+  useEffect(() => {
+    if (!final || restoredSession !== sessionId || step < scenes.length) return
+    const key = endingKeyOf(final.response)
+    const scene = defaultScene(key, final.suspectId || '관계자')
+    saveEndingScene(key, [...(final.response.scene ?? []), ...scene])
+    recordEnding(key)
+  }, [final, restoredSession, sessionId, step, scenes])
 
   const updateStep = (value: number) => {
     const next = Math.max(
@@ -439,80 +481,21 @@ export default function Final() {
         <div className={styles.cinematicBackdrop} aria-hidden="true" />
 
         <main className={styles.cinematicMain}>
-          <AnimatePresence mode="wait">
-            <motion.section
-              key={`ending-scene-${step}`}
-              className={styles.cinematicScene}
-              initial={
-                reduceMotion
-                  ? false
-                  : { opacity: 0, y: 18 }
-              }
-              animate={{ opacity: 1, y: 0 }}
-              exit={
-                reduceMotion
-                  ? { opacity: 1 }
-                  : { opacity: 0, y: -12 }
-              }
-              transition={{
-                duration: reduceMotion ? 0 : 0.55,
-              }}
-            >
-              <p className={styles.sceneChapter}>
-                {scene.chapter}
-              </p>
-
-              <h1 className={`serif ${styles.sceneTitle}`}>
-                {scene.title}
-              </h1>
-
-              <div className={styles.sceneLines}>
-                {scene.lines.map((line, index) => (
-                  <motion.p
-                    key={`${step}-${index}`}
-                    initial={
-                      reduceMotion
-                        ? false
-                        : { opacity: 0, y: 8 }
-                    }
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{
-                      delay: reduceMotion ? 0 : 0.25 + index * 0.18,
-                      duration: reduceMotion ? 0 : 0.55,
-                    }}
-                  >
-                    {line}
-                  </motion.p>
-                ))}
-              </div>
-
-              <div className={styles.sceneControls}>
-                <span className={styles.sceneProgress}>
-                  {String(step + 1).padStart(2, '0')}
-                  {' / '}
-                  {String(scenes.length).padStart(2, '0')}
-                </span>
-
-                <button
-                  type="button"
-                  className={styles.sceneSkip}
-                  onClick={() => updateStep(scenes.length)}
-                >
-                  스토리 건너뛰기
-                </button>
-
-                <button
-                  type="button"
-                  className={styles.sceneNext}
-                  onClick={() => updateStep(step + 1)}
-                >
-                  {step === scenes.length - 1
-                    ? '최종 기록 확인'
-                    : '다음 장면 →'}
-                </button>
-              </div>
-            </motion.section>
-          </AnimatePresence>
+          <VisualNovelDialogue
+            key={`ending-novel-${sessionId}-${step}`}
+            storageKey={`serin-novel-ending-${sessionId}-${step}`}
+            chapter={scene.chapter}
+            title={scene.title}
+            lines={scene.lines}
+            progress={`${String(step + 1).padStart(2, '0')} / ${String(scenes.length).padStart(2, '0')}`}
+            onNext={() => updateStep(step + 1)}
+            onSkip={() => updateStep(scenes.length)}
+            nextLabel={
+              step === scenes.length - 1
+                ? '최종 기록 확인'
+                : '다음 장면'
+            }
+          />
         </main>
       </div>
     )
@@ -540,7 +523,9 @@ export default function Final() {
           CASE 001 · 마지막 기록: 졸업하지 못한 밤
         </p>
 
+        <img style={{width: '100%', maxHeight: '42vh', objectFit: 'contain'}} src={import.meta.env.BASE_URL + cardPath(endingKeyOf(response))} alt={ending.title} />
         <h1 className="serif">{ending.title}</h1>
+        <section><h2>놓친 단서</h2><p>{EVIDENCE_SLOTS.filter(id => !session?.foundEvidence.includes(id)).join(' · ') || '모든 단서를 확보했습니다.'}</p></section>
 
         <p className={styles.verdict}>
           판정 · {RESULT_LABEL[response.result]}

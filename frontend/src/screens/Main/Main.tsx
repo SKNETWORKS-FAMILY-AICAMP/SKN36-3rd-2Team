@@ -1,18 +1,21 @@
+import EndingsDialog from '../../components/EndingsDialog'
+import { loadSeenEndings } from '../../data/endings'
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import Reveal from './Reveal'
 import { ALBUM, GROUP_PHOTO } from '../../data/characters'
 import {
-  ALBUM_TEXT, CASE_INTRO, PHOTO_CAPTION, TIMELINE_LINES,
+  ALBUM_TEXT, CASE_INTRO, PHOTO_CAPTION,
 } from '../../data/publicData'
 import { useGameStore } from '../../store/gameStore'
 import { api } from '../../api/client'
 import styles from './Main.module.css'
 
-type Stage = 'poster' | 'album' | 'group' | 'timeline' | 'intro'
+type Stage = 'poster' | 'album' | 'group' | 'intro'
 
 export default function Main() {
+  const [gallery, setGallery] = useState(false)
   const [stage, setStage] = useState<Stage>('poster')
   const reduce = useReducedMotion()
   const startGame = useGameStore((s) => s.startGame)
@@ -72,8 +75,9 @@ export default function Main() {
 
   // 포스터에서 Enter/Space 로도 시작
   useEffect(() => {
-    if (stage !== 'poster' || saved) return
+    if (stage !== 'poster' || saved || gallery) return
     const onKey = (e: KeyboardEvent) => {
+      if (e.target instanceof Element && e.target.closest('button,[role=dialog]')) return
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault()
         void begin()
@@ -81,7 +85,7 @@ export default function Main() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [stage, saved, begin])
+  }, [stage, saved, begin, gallery])
 
   return (
     <main className={styles.root}>
@@ -96,7 +100,8 @@ export default function Main() {
         >
           {stage === 'poster' && (
             <>
-              <Reveal onStart={() => void begin()} onResume={saved ? () => void resume() : undefined} />
+              {gallery && <EndingsDialog onClose={() => setGallery(false)} />}
+              <Reveal seen={loadSeenEndings().length} onGallery={() => setGallery(true)} onStart={() => void begin()} onResume={saved ? () => void resume() : undefined} />
               {askNew && (
                 <div className={styles.askBackdrop} role="dialog" aria-modal="true" aria-label="새로 시작 확인">
                   <div className={`${styles.ask} panel`}>
@@ -120,10 +125,7 @@ export default function Main() {
             <Album reduce={!!reduce} onNext={() => setStage('group')} onSkip={toIntro} />
           )}
           {stage === 'group' && (
-            <Group onNext={() => setStage('timeline')} onSkip={toIntro} />
-          )}
-          {stage === 'timeline' && (
-            <Timeline reduce={!!reduce} onNext={toIntro} onSkip={toIntro} />
+            <Group onNext={() => setStage('intro')} onSkip={toIntro} />
           )}
           {stage === 'intro' && <Intro reduce={!!reduce} onStart={() => navigate('/story')} />}
         </motion.section>
@@ -134,8 +136,8 @@ export default function Main() {
 
 function SkipButton({ onSkip }: { onSkip: () => void }) {
   return (
-    <button type="button" className={styles.skip} onClick={onSkip}>
-      인트로 건너뛰기
+    <button type="button" className="scene-skip" onClick={onSkip}>
+      건너뛰기
     </button>
   )
 }
@@ -213,38 +215,6 @@ function Group({ onNext, onSkip }: { onNext: () => void; onSkip: () => void }) {
   )
 }
 
-/* ④ 시간 자막: 2016 → 2026 */
-function Timeline({ reduce, onNext, onSkip }: { reduce: boolean; onNext: () => void; onSkip: () => void }) {
-  const step = reduce ? 0 : 1.8
-  return (
-    <div className={styles.timelineWrap}>
-      <SkipButton onSkip={onSkip} />
-      <div className={styles.timelineLines}>
-        {TIMELINE_LINES.map((line, i) => (
-          <motion.p
-            key={line}
-            className={`serif ${styles.timelineLine}`}
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.6 + i * step, duration: reduce ? 0 : 1 }}
-          >
-            {line}
-          </motion.p>
-        ))}
-      </div>
-      <motion.button
-        type="button"
-        className={styles.next}
-        onClick={onNext}
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ delay: 0.6 + TIMELINE_LINES.length * step, duration: reduce ? 0 : 0.8 }}
-      >
-        다음 ▸
-      </motion.button>
-    </div>
-  )
-}
 
 /* ⑤ 사건 시작 안내 */
 function Intro({ reduce, onStart }: { reduce: boolean; onStart: () => void }) {
@@ -253,8 +223,8 @@ function Intro({ reduce, onStart }: { reduce: boolean; onStart: () => void }) {
   const d = (n: number) => (reduce ? 0 : n)
   return (
     <div className={styles.introWrap}>
-      <button type="button" className={styles.skip} onClick={onStart}>
-        바로 조사 시작 ▸
+      <button type="button" className="scene-skip" onClick={onStart}>
+        건너뛰기
       </button>
       <article className={styles.file}>
         <p className={styles.stamp}>CASE 001</p>

@@ -52,7 +52,7 @@
 
 ### 게임 진행 흐름
 
-![게임 진행 흐름도](./docs/images/game-flow.png)
+![게임 진행 흐름도](./docs/game-flow.png)
 
 게임은 **프롤로그 → NPC 자유 대화 → 증거 발견·수집·제시 → 관계 분석 → 범인 지목 → 엔딩** 순서로 진행됩니다. 조건을 충족하지 못했거나 오답 지목 후 기회가 남으면 조사 단계로 돌아갈 수 있습니다.
 
@@ -79,7 +79,7 @@
 
 ## 🏗️ 시스템 아키텍처
 
-![시스템 아키텍처](./docs/images/system-architecture.png)
+![시스템 아키텍처](./docs/system-architecture.png)
 
 프론트엔드(React)는 게임 화면과 사용자 입력을 담당하고, 백엔드(FastAPI)는 세션·게임 규칙·접근 권한을 관리합니다. Qdrant는 사건 문서의 Dense/BM25 검색, Neo4j는 관계 탐색, SQLite는 게임 상태와 대화 기록 저장을 담당합니다. 검증된 근거만 LLM에 전달하여 NPC 답변을 생성합니다.
 

@@ -65,6 +65,22 @@ QUOTE_RETRY_RULES = """
 정확히 복사할 수 없는 문장은 인용하지 마세요.
 """.strip()
 
+EMPTY_QUOTES_RETRY_RULES = """
+이전 응답에서 인용문을 찾지 못했습니다.
+
+다음 절차로 승인된 근거를 다시 확인하세요.
+
+1. player_question에서 핵심 인물, 사건, 시간, 문서를 파악하세요.
+2. verified_context의 각 source_id를 개별적으로 검토하세요.
+3. 질문을 직접 뒷받침하는 내용이 있는지 확인하세요.
+4. 관련 근거가 있다면 원문에서 연속된 6~320자를 그대로 복사하세요.
+5. 반드시 동일한 source_id와 quote를 사용하세요.
+6. 완전한 문장이 아니어도 정확한 원문 구절이면 인용할 수 있습니다.
+7. 추측하거나 관련 없는 문장을 선택하지 마세요.
+8. 관련 근거가 전혀 없다면 {"quotes": []}를 반환하세요.
+
+최상위 필드가 quotes 하나인 JSON 객체만 반환하세요.
+""".strip()
 
 @dataclass(frozen=True, slots=True)
 class NPCGroundedReply:
@@ -378,7 +394,13 @@ def run_grounded_npc_response(
 
         retry_messages = [dict(message) for message in messages]
 
-        retry_messages[0]["content"] += "\n\n" + QUOTE_RETRY_RULES
+        retry_rules = (
+            EMPTY_QUOTES_RETRY_RULES
+            if reason == "EMPTY_QUOTES"
+            else QUOTE_RETRY_RULES
+        )
+
+        retry_messages[0]["content"] += "\n\n" + retry_rules
 
         raw_output = generate(retry_messages)
 

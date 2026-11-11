@@ -70,19 +70,23 @@ def test_c01_speaks_naturally():
 
 
 def test_character_style_changes():
+    """반복 질문에 대해 NPC마다 다른 말투를 사용하는지 확인한다."""
+
     c01 = render_npc_speech(
         make_reply(),
         context=make_context(),
-        reaction=make_reaction("C01"),
+        reaction=make_reaction("C01", "repeated"),
     )
 
     c02 = render_npc_speech(
         make_reply(),
         context=make_context(),
-        reaction=make_reaction("C02"),
+        reaction=make_reaction("C02", "repeated"),
     )
 
     assert c01 != c02
+    assert "다시 말씀드리겠습니다." in c01
+    assert "같은 질문이군요." in c02
     assert QUOTE in c01
     assert QUOTE in c02
 
@@ -149,3 +153,16 @@ def test_fallback_does_not_create_new_facts():
     )
 
     assert text == FALLBACK_REPLY
+
+def test_c05_speech_without_boilerplate():
+    """검증된 원문만 표시하며 불필요한 도입 문장을 제거한다."""
+
+    text = render_npc_speech(
+        make_reply(),
+        context=make_context(),
+        reaction=make_reaction("C05"),
+    )
+
+    assert text == QUOTE
+    assert "(근거:" not in text
+    assert "신중하게 말씀드리겠습니다." not in text

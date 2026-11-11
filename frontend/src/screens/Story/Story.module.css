@@ -66,3 +66,51 @@ div[role=button].box { cursor: pointer; }
 .scenePhoto img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; background: #111; }
 .scenePhoto figcaption { margin-top: 6px; text-align: center; font-family: var(--font-serif); font-size: 14px; letter-spacing: .12em; color: #3a2e1c; }
 @media (max-width: 900px) { .scenePhoto { width: min(250px, 62vw); top: 70px; right: 12px; } }
+
+
+/* ============================================================
+   Issue #59 — Cinematic Prologue
+   ============================================================ */
+
+.storyControls {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 28px;
+}
+
+.storyProgress {
+  margin-right: auto;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  letter-spacing: 0.12em;
+  color: var(--paper-400);
+}
+
+.storySkip {
+  padding: 9px 12px;
+  background: transparent;
+  border: 0;
+  color: var(--paper-300);
+  cursor: pointer;
+  transition: color 0.2s ease;
+}
+
+.storySkip:hover {
+  color: var(--paper-100);
+}
+
+.storyControls .go {
+  flex-shrink: 0;
+}
+
+@media (max-width: 620px) {
+  .storyControls {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .storyControls .go {
+    width: 100%;
+  }
+}

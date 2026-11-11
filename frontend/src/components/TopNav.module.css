@@ -66,3 +66,32 @@
 .ended { display: flex; align-items: center; justify-content: center; gap: 14px; padding: 6px 16px; font-size: 13px; color: var(--paper-200); background: rgba(140,42,42,.35); border-bottom: 1px solid var(--ink-600); }
 
 .dot { display:inline-grid; place-items:center; min-width:16px; height:16px; margin-left:6px; padding:0 4px; font:700 10px/1 var(--font-mono); font-style:normal; color:var(--ink-950); background:var(--brass-400); border-radius:8px; vertical-align:middle; }
+
+
+/* Issue #59 — 도움말 버튼 */
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.actions > button {
+  white-space: nowrap;
+}
+
+@media (max-width: 850px) {
+  .actions {
+    gap: 4px;
+  }
+
+  .actions > button {
+    width: 36px;
+    min-width: 36px;
+    padding: 0;
+  }
+
+  .actionLabel {
+    display: none;
+  }
+}

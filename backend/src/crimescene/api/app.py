@@ -59,7 +59,8 @@ ALLOWED_ORIGINS = [
     "http://127.0.0.1:5173",
 ]
 
-
+# 플레이어가 API로 입력하는 NPC 질문의 최대 길이
+MAX_PLAYER_QUESTION_LENGTH = 200
 # ============================================================
 # Response Schemas
 # ============================================================
@@ -98,8 +99,9 @@ class ChatRequest(BaseModel):
 
     question: str = Field(
         min_length=1,
-        max_length=MAX_MESSAGE_LENGTH,
+        max_length=MAX_PLAYER_QUESTION_LENGTH,
     )
+
     presentedEvidenceId: str | None = Field(
         default=None,
         pattern=r"^E(?:0[1-9]|10)$",
@@ -114,6 +116,7 @@ class ChatRequest(BaseModel):
             raise ValueError("질문이 비어 있습니다.")
 
         return question
+
 
 
 class ChatResponse(BaseModel):

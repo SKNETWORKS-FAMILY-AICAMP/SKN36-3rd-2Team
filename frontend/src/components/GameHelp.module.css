@@ -1,0 +1,361 @@
+
+.dialog {
+  box-sizing: border-box;
+  width: min(960px, calc(100vw - 24px));
+  max-width: none;
+  max-height: 88dvh;
+  margin: auto;
+  padding: 0;
+  overflow: hidden;
+  color: var(--paper-100);
+  background: #141310;
+  border: 1px solid var(--brass-700);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, .75);
+}
+
+.dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+.dialog::backdrop {
+  background: rgba(0, 0, 0, .84);
+  backdrop-filter: blur(5px);
+}
+
+/* 제목 */
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  flex: none;
+  padding: 28px 32px 22px;
+  border-bottom: 1px solid var(--ink-600);
+}
+
+.kicker {
+  margin: 0 0 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: .15em;
+  color: var(--brass-400);
+}
+
+.title {
+  margin: 0 0 12px;
+  font-family: var(--font-serif);
+  font-size: 32px;
+  color: var(--paper-100);
+}
+
+.intro {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--paper-300);
+  word-break: keep-all;
+}
+
+.close {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  background: transparent;
+  border: 0;
+  color: var(--paper-300);
+  cursor: pointer;
+}
+
+.close:hover {
+  color: var(--paper-100);
+}
+
+/* 카테고리 메뉴 */
+
+.tabs {
+  display: flex;
+  flex: none;
+  gap: 0;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--ink-600);
+  scrollbar-width: thin;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  flex: 0 0 auto;
+  padding: 16px 18px;
+  color: var(--paper-300);
+  background: #191714;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: var(--paper-100);
+  background: #211d18;
+}
+
+.tabActive {
+  color: var(--brass-400);
+  border-bottom-color: var(--brass-500);
+  background: #211d18;
+}
+
+/* 본문 */
+
+.content {
+  flex: 1;
+  min-height: 0;
+  padding: 28px 34px 36px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.sectionHead {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 28px;
+  padding-bottom: 22px;
+  border-bottom: 1px solid var(--ink-600);
+}
+
+.sectionIcon {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  flex: none;
+  border: 1px solid var(--brass-700);
+  color: var(--brass-400);
+}
+
+.sectionHead h3 {
+  margin: 0 0 8px;
+  font-family: var(--font-serif);
+  font-size: 25px;
+  color: var(--paper-100);
+}
+
+.sectionHead p {
+  margin: 0;
+  font-size: 14px;
+  color: var(--paper-300);
+}
+
+/* 단계별 설명 */
+
+.steps {
+  display: grid;
+  gap: 24px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.step {
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+}
+
+.stepNumber {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--brass-400);
+  background: rgba(176, 141, 79, .09);
+  border: 1px solid var(--brass-700);
+}
+
+.stepBody {
+  flex: 1;
+  min-width: 0;
+}
+
+.stepBody h4 {
+  margin: 2px 0 9px;
+  font-family: var(--font-serif);
+  font-size: 19px;
+  font-weight: 600;
+  color: var(--paper-100);
+}
+
+.stepBody > p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.9;
+  color: var(--paper-300);
+  word-break: keep-all;
+}
+
+/* 질문·조작 예시 */
+
+.example {
+  margin-top: 14px;
+  padding: 16px 18px;
+  border-left: 2px solid var(--brass-500);
+  background: rgba(176, 141, 79, .08);
+}
+
+.example strong {
+  display: block;
+  margin-bottom: 9px;
+  font-size: 12px;
+  color: var(--brass-400);
+}
+
+.example p {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: 14px;
+  line-height: 1.9;
+  white-space: pre-wrap;
+  color: var(--paper-200);
+  word-break: keep-all;
+}
+
+/* 게임 팁 */
+
+.tips {
+  margin-top: 32px;
+  padding: 22px 24px;
+  background: #1d1b17;
+  border: 1px solid var(--ink-600);
+}
+
+.tips h4 {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0 0 14px;
+  font-size: 15px;
+  color: var(--brass-400);
+}
+
+.tips ul {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding-left: 19px;
+}
+
+.tips li {
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--paper-300);
+  word-break: keep-all;
+}
+
+/* 하단 버튼 */
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 22px;
+  flex: none;
+  padding: 18px 32px;
+  background: #141310;
+  border-top: 1px solid var(--ink-600);
+}
+
+.footer p {
+  margin: 0;
+  max-width: 480px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--paper-400);
+}
+
+.start {
+  min-height: 44px;
+  padding: 0 24px;
+  flex: none;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink-950);
+  background: var(--brass-500);
+  border: 0;
+  cursor: pointer;
+}
+
+.start:hover {
+  background: var(--brass-400);
+}
+
+/* 모바일 */
+
+@media (max-width: 700px) {
+  .dialog {
+    width: calc(100vw - 16px);
+    max-height: 92dvh;
+  }
+
+  .header {
+    padding: 20px;
+  }
+
+  .title {
+    font-size: 25px;
+  }
+
+  .intro {
+    font-size: 12px;
+  }
+
+  .tab {
+    padding: 13px 14px;
+    font-size: 12px;
+  }
+
+  .content {
+    padding: 22px 18px;
+  }
+
+  .sectionHead h3 {
+    font-size: 21px;
+  }
+
+  .step {
+    gap: 12px;
+  }
+
+  .stepNumber {
+    width: 32px;
+    height: 32px;
+  }
+
+  .stepBody h4 {
+    font-size: 17px;
+  }
+
+  .footer {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+    padding: 16px 20px;
+  }
+
+  .footer p {
+    display: none;
+  }
+
+  .start {
+    width: 100%;
+  }
+}

@@ -14,6 +14,7 @@ from crimescene.retriever.multisource_rrf import FusedSearchCandidate
 from crimescene.retriever.npc_graph_knowledge_guard import (
     NPCGraphKnowledgeResult,
 )
+from crimescene.retriever.npc_response_gate import FALLBACK_REPLY
 from crimescene.retriever.query_graph_retriever import QuestionGraphContext
 from crimescene.scenario.policy_evaluator import PolicyEvaluator
 from crimescene.scenario.schemas.game_state import GameState
@@ -313,6 +314,4 @@ def test_blocked_reply_uses_fixed_fallback(mocks):
 
     result = run_gate()
 
-    assert result.fallback_reply == (
-        "그 부분에 대해서는 지금 제가 확실히 말씀드릴 수 있는 게 없어요."
-    )
+    assert result.fallback_reply == FALLBACK_REPLY

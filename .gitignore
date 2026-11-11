@@ -86,3 +86,6 @@ backend/.local/
 /data/*.sqlite3*
 /frontend/.vite/
 *.bak
+
+/backend/data/game_state.sqlite3
+/backend/data/scenario.zip

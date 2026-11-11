@@ -23,7 +23,7 @@ from crimescene.scenario.schemas.relationship import RelationshipSourceEdge
 
 CASE_ID = "CASE-001"
 
-FALLBACK_REPLY = "그 부분에 대해서는 지금 제가 확실히 말씀드릴 수 있는 게 없어요."
+FALLBACK_REPLY = "지금은 그 부분을 말씀드리기 어렵습니다. 다른 단서를 확인하신 뒤 다시 물어봐 주세요."
 
 GROUNDING_RULES = """
 당신은 추리 게임 속 NPC입니다.

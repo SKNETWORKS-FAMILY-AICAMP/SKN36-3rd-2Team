@@ -192,6 +192,9 @@ def test_unverified_quote_returns_fallback(environment):
     )
 
     assert result.reply.grounded is False
+    assert result.display_text == FALLBACK_REPLY
+    assert "다른 단서를 확인하신 뒤" in result.display_text
+    assert result.exchange.npc_message == FALLBACK_REPLY
     assert result.reply.text == FALLBACK_REPLY
 
     history = store.get_history(state, "C01")

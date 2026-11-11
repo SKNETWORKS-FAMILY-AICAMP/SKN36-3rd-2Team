@@ -35,3 +35,45 @@
 *::-webkit-scrollbar-track { background: #12100e; }
 *::-webkit-scrollbar-thumb { background: #4a4034; border-radius: 3px; }
 *::-webkit-scrollbar-thumb:hover { background: #6b5a40; }
+
+/* Issue #58: team ZIP visual integration (keeps dev-only styles above) */
+/* 공통 UI 규칙: 모든 화면이 같은 버튼·제목·패널 규칙을 쓴다 */
+
+/* 페이지 머리말: 제목 + 부제 + 황동 가는 선 */
+.page-head { position: relative; padding-bottom: var(--sp-3); margin-bottom: var(--sp-4); }
+.page-head::after { content: ''; position: absolute; left: 0; bottom: 0; width: 56px; height: 2px; background: var(--brass-500); }
+.page-head h1 { font-family: var(--font-serif); font-size: var(--fs-title); font-weight: 700; letter-spacing: var(--track-title); color: var(--paper-100); line-height: 1.25; }
+.page-head p { margin-top: var(--sp-1); font-size: var(--fs-small); color: var(--paper-400); letter-spacing: .02em; }
+
+/* 버튼: 높이 40, 각진 모서리, 1px 선. 기본(선) / 강조(황동) / 위험(적색) / 작은 */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-2);
+  min-height: var(--btn-h); padding: 0 var(--sp-5);
+  font-family: var(--font-sans); font-size: var(--fs-small); font-weight: 500; letter-spacing: var(--track-label);
+  color: var(--paper-100); background: transparent; border: 1px solid var(--brass-700); border-radius: 0;
+  cursor: pointer; transition: background .2s, border-color .2s, color .2s;
+}
+.btn:hover:not(:disabled) { background: rgba(176,141,79,.14); border-color: var(--brass-500); }
+.btn:disabled { opacity: .4; cursor: default; }
+.btn--primary { color: var(--ink-950); background: var(--brass-500); border-color: var(--brass-500); font-weight: 700; }
+.btn--primary:hover:not(:disabled) { background: var(--brass-400); border-color: var(--brass-400); }
+.btn--danger { color: var(--paper-100); background: var(--blood-500); border-color: var(--blood-500); font-weight: 700; }
+.btn--danger:hover:not(:disabled) { background: var(--blood-400); border-color: var(--blood-400); }
+.btn--sm { min-height: var(--btn-h-sm); padding: 0 var(--sp-3); font-size: var(--fs-cap); }
+.btn--ghost { border-color: transparent; color: var(--paper-300); }
+
+/* 패널(모달·카드): 어두운 면 + 1px 선 */
+.panel { background: var(--ink-800); border: var(--line); box-shadow: var(--shadow-deep); }
+
+/* 화면 전환 래퍼 */
+.page-fade { min-height: 100%; }
+
+/* 스크롤바: 얇고 어두운 불투명 */
+* { scrollbar-width: thin; scrollbar-color: #4a4034 #12100e; }
+*::-webkit-scrollbar { width: 6px; height: 6px; }
+*::-webkit-scrollbar-track { background: #12100e; }
+*::-webkit-scrollbar-thumb { background: #4a4034; border-radius: 3px; }
+*::-webkit-scrollbar-thumb:hover { background: #6b5a40; }
+
+/* 화면에는 안 보이고 스크린리더만 읽는 텍스트 */
+.sr-only { position:absolute; width:1px; height:1px; margin:-1px; padding:0; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }

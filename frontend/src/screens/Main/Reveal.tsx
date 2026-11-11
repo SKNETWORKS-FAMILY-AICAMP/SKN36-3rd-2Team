@@ -148,10 +148,14 @@ export default function Reveal({ onStart, onResume }: { onStart: () => void; onR
       <img className={styles.photo} src={GROUP_PHOTO} alt="" draggable={false} />
       <canvas ref={canvasRef} className={styles.mask} aria-hidden="true" />
       <div className={styles.content}>
-        <div className={styles.titleBox}>
-          <p className={styles.prefix}>{GAME_TITLE.prefix}</p>
-          <h1 className={`serif ${styles.title}`}>{GAME_TITLE.main}</h1>
-        </div>
+        <h1 className={styles.logoBox}>
+          <img
+            className={styles.logo}
+            src={`${import.meta.env.BASE_URL}assets/logo/logo_A_album.webp`}
+            alt={`${GAME_TITLE.prefix}: ${GAME_TITLE.main} · THE LAST RECORD · CASE 001`}
+            draggable={false}
+          />
+        </h1>
         <div className={styles.bottom}>
           <p className={`${styles.hint} ${hint ? styles.hintOn : ''}`} aria-hidden={!hint}>
             {reduce ? '움직임 줄이기 설정이 켜져 있어 사진은 일부만 보입니다' : '마우스를 움직여 보세요'}

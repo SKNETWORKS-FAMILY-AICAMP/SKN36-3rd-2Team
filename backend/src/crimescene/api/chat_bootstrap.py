@@ -266,6 +266,14 @@ def load_chat_runtime() -> Iterator[ChatRuntime]:
             evidence_rules=evidence_rules,
             evaluator=PolicyEvaluator(policies),
         )
+
+        # 선택적 RAG 워밍업: 실제 사건 문서는 사용하지 않습니다.
+        if os.getenv("CRIMESCENE_RAG_WARMUP", "false").lower() in {
+            "1", "true", "yes"
+        }:
+            resources.encoder.encode_query("학교 기록")
+            resources.embedder.embed_query("학교 기록")
+
         yield ChatRuntime(
             resources=resources,
             policies=policies,

@@ -30,3 +30,39 @@
 }
 
 .ended { display: flex; align-items: center; justify-content: center; gap: 14px; padding: 6px 16px; font-size: 13px; color: var(--paper-200); background: rgba(140,42,42,.35); border-bottom: 1px solid var(--ink-600); }
+
+/* Issue #58: team ZIP visual integration (keeps dev-only styles above) */
+.bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 24px;
+  height: 52px; padding: 0 28px; flex: none;
+  border-bottom: 1px solid var(--ink-700);
+  background: var(--ink-950);
+}
+.brand {
+  font-family: var(--font-serif); font-size: 15px; letter-spacing: 0.08em;
+  color: var(--paper-300); text-decoration: none; white-space: nowrap;
+}
+.brand em { font-style: normal; color: var(--brass-400); margin-left: 6px; }
+.nav { display: flex; gap: 4px; overflow-x: auto; }
+.link {
+  padding: 8px 14px; font-family: var(--font-serif); font-size: var(--fs-small); letter-spacing: var(--track-label); color: var(--paper-300); text-decoration: none;
+  border-bottom: 2px solid transparent; white-space: nowrap; transition: color .2s;
+}
+.link:hover { color: var(--paper-100); }
+.bar > button { white-space: nowrap; flex: none; }
+.active { color: var(--brass-400); border-bottom-color: var(--brass-500); }
+@media (max-width: 900px) {
+  .bar { padding: 0 14px; gap: 10px; }
+  .brand em { display: none; }
+}
+@media (max-width: 700px) {
+  .brand { display: none; }
+  .bar { height: 48px; }
+  .nav { flex: 1; min-width: 0; scrollbar-width: none; }
+  .nav::-webkit-scrollbar { display: none; }
+  .link { padding: 8px 10px; font-size: 14px; }
+}
+
+.ended { display: flex; align-items: center; justify-content: center; gap: 14px; padding: 6px 16px; font-size: 13px; color: var(--paper-200); background: rgba(140,42,42,.35); border-bottom: 1px solid var(--ink-600); }
+
+.dot { display:inline-grid; place-items:center; min-width:16px; height:16px; margin-left:6px; padding:0 4px; font:700 10px/1 var(--font-mono); font-style:normal; color:var(--ink-950); background:var(--brass-400); border-radius:8px; vertical-align:middle; }

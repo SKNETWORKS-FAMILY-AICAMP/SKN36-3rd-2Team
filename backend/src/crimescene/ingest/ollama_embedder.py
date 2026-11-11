@@ -75,6 +75,7 @@ class OllamaEmbedder:
                 model=self.model,
                 input=batch,
                 truncate=False,
+                keep_alive="15m",
             )
 
             batch_vectors = response.embeddings

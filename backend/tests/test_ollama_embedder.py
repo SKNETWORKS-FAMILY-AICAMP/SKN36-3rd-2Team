@@ -17,18 +17,19 @@ def mock_client():
 
     client = Mock(spec=Client)
 
-    def fake_embed(*, model, input, truncate):
+    def fake_embed(*, model, input, truncate, keep_alive):
         assert model
         assert truncate is False
+        assert keep_alive == "15m"
 
         return SimpleNamespace(
             embeddings=[
-                [float(index + 1)] * VECTOR_SIZE for index, _ in enumerate(input)
+                [float(index + 1)] * VECTOR_SIZE
+                for index, _ in enumerate(input)
             ]
         )
 
     client.embed.side_effect = fake_embed
-
     return client
 
 
@@ -99,7 +100,7 @@ def test_batch_processing(mock_client):
 
 
 def test_model_name_forwarded(mock_client):
-    """설정한 모델명이 Ollama에 전달되는지 확인."""
+    """설정한 모델명과 유지 시간이 Ollama에 전달되는지 확인."""
 
     embedder = OllamaEmbedder(
         model="bge-m3",
@@ -112,6 +113,7 @@ def test_model_name_forwarded(mock_client):
         model="bge-m3",
         input=["테스트 질문"],
         truncate=False,
+        keep_alive="15m",
     )
 
 

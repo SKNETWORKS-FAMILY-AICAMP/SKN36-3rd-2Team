@@ -1,5 +1,9 @@
-.panel { position: fixed; top: 56px; right: 0; bottom: 0; width: min(560px, 100vw); z-index: 45; display: flex; flex-direction: column; background: var(--ink-900); border-left: 1px solid var(--brass-700); box-shadow: -20px 0 50px rgba(0,0,0,.6); }
+.panel { position: fixed; top: 56px; right: 0; bottom: 0;  z-index: 45; display: flex; flex-direction: column; background: var(--ink-900); border-left: 1px solid var(--brass-700); box-shadow: -20px 0 50px rgba(0,0,0,.6); }
 .panel header { display: flex; justify-content: space-between; align-items: center; padding: 12px 18px; border-bottom: 1px solid var(--ink-600); }
 .panel h2 { font-size: 17px; color: var(--brass-400); letter-spacing: .06em; }
 .panel header button { background: none; border: 0; color: var(--paper-300); cursor: pointer; }
 .panel > div { flex: 1; }
+.grip { position: absolute; left: -5px; top: 0; bottom: 0; width: 10px; cursor: ew-resize; z-index: 2; touch-action: none; }
+.grip::after { content: ''; position: absolute; left: 4px; top: 50%; width: 3px; height: 46px; margin-top: -23px; border-radius: 2px; background: var(--brass-700); opacity: .6; }
+.grip:hover::after, .grip:focus-visible::after { opacity: 1; background: var(--brass-400); }
+.grip:focus-visible { outline: none; }

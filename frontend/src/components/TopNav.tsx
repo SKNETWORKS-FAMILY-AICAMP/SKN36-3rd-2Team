@@ -19,7 +19,6 @@ const ITEMS = [
   ['/chat', '인물 대화'],
   ['/evidence', '증거 보관함'],
   ['/relations', '인물 관계도'],
-  ['/notes', '추리 노트'],
   ['/accuse', '범인 지목'],
 ] as const
 

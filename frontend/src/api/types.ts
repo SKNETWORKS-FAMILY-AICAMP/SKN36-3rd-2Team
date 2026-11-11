@@ -79,7 +79,10 @@ export interface EndingTruth {
   crimeMethod: string
 }
 
+export interface EndingLine { speaker: string; text: string; image?: string }
 export interface EndingDetails {
+  scene?: EndingLine[]
+  verdict?: 'FULL' | 'ESTIMATED' 
   outcome: 'SUCCESS' | 'FAILURE'
   title: string
   message: string
@@ -89,6 +92,7 @@ export interface EndingDetails {
 }
 
 export interface AccuseResponse {
+  scene?: EndingLine[]
   result: AccuseResult
   attemptsLeft: number
   /** 게임이 끝났는지. 마지막 기회를 써서 실패한 경우에도 true (ending이 비어 있어도 됨) */

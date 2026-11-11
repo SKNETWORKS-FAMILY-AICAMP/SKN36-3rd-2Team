@@ -52,3 +52,15 @@
 .docTabs { display: flex; gap: 6px; margin: 0 0 14px; }
 .docTab { padding: 5px 12px; font-size: 13px; color: #5a4a35; background: rgba(60,45,25,.08); border: 1px solid rgba(60,45,25,.3); cursor: pointer; }
 .docTabOn { color: #2a2118; background: rgba(176,141,79,.28); border-color: #8a6a35; font-weight: 700; }
+
+.prop { margin: 0 0 16px; padding: 8px 8px 6px; background: #f3ead4; box-shadow: 0 6px 16px rgba(0,0,0,.35); transform: rotate(-0.6deg); }
+.prop img { display: block; width: 100%; height: auto; filter: sepia(.15) contrast(1.02); }
+.prop figcaption { margin-top: 5px; font-size: 12px; color: rgba(60,45,25,.7); text-align: right; letter-spacing: .04em; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: -4px 0 12px; }
+.chips span { padding: 2px 10px; font-size: 12px; color: #4a3b22; background: rgba(110,87,48,.14); border: 1px solid rgba(110,87,48,.4); border-radius: 999px; }
+
+.thumb { width: 100%; aspect-ratio: 3 / 2; object-fit: cover; background: #1a1612; box-shadow: 0 2px 6px rgba(0,0,0,.45); border: 3px solid #f1e9d2; border-bottom-width: 5px; }
+
+.item { position: relative; }
+.newTag { position:absolute; top:6px; right:6px; padding:1px 6px; font:700 10px/1.4 var(--font-mono); font-style:normal; letter-spacing:.08em; color:var(--ink-950); background:var(--brass-400); }

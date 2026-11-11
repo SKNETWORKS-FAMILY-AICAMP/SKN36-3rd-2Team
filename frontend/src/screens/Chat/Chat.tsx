@@ -4,6 +4,7 @@ import { Navigate, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import { FileSearch, Lock, NotebookPen, Send, X } from 'lucide-react'
 
+import Objective from '../../components/Objective'
 import TopNav from '../../components/TopNav'
 import Toasts from '../../components/Toasts'
 import CharacterPortrait from '../../components/CharacterPortrait'
@@ -73,6 +74,20 @@ export default function Chat() {
   }, [sid, npcId, load])
 
   // 다른 인물과의 대화 여부를 미리 불러옵니다.
+  useEffect(() => {
+    if (sid && npcId && session?.unlockedNpcs.includes(npcId)) {
+      try { localStorage.setItem('serin-last-room', JSON.stringify({ sid, npcId })) } catch { /* optional persistence */ }
+    }
+  }, [sid, npcId, session])
+
+  function lastRoom() {
+    try {
+      const room = JSON.parse(localStorage.getItem('serin-last-room') ?? 'null')
+      if (room?.sid === sid && unlocked.includes(room.npcId)) return room.npcId
+    } catch { /* use first available room */ }
+    return unlocked[0] ?? 'C01'
+  }
+
   const unlockedKey = session?.unlockedNpcs.join()
 
   useEffect(() => {
@@ -200,7 +215,7 @@ export default function Chat() {
     return session ? (
       <Navigate
         to={{
-          pathname: `/chat/${unlocked[0] ?? 'C01'}`,
+          pathname: `/chat/${lastRoom()}`,
           search,
         }}
         replace
@@ -262,6 +277,7 @@ export default function Chat() {
     <div className={styles.page}>
       <TopNav />
       <Toasts />
+      <Objective />
 
       {/* ======================================================
           인물 선택

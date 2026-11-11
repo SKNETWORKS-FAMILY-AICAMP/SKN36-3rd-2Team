@@ -99,6 +99,7 @@ interface BackendRelations {
 }
 
 interface BackendAccuseResponse {
+  verdict?: 'FULL' | 'ESTIMATED'
   result: 'CORRECT' | 'INCORRECT' | 'NOT_ENOUGH_EVIDENCE'
   attemptsLeft: number
   game: BackendGameState
@@ -526,7 +527,7 @@ export const httpApi: GameApi = {
     const result: AccuseResponse = {
       result:
         response.result === 'CORRECT'
-          ? 'FULL'
+          ? response.verdict ?? 'FULL'
           : response.result === 'INCORRECT'
             ? 'WRONG'
             : 'NOT_ENOUGH_EVIDENCE',
@@ -550,6 +551,7 @@ export const httpApi: GameApi = {
           ? 'DEEP'
           : 'NORMAL'
         result.truth = ending.truth
+        result.scene = ending.scene
       } catch {
         // 지목 결과는 이미 저장되었으므로 재지목하지 않습니다.
         // 엔딩 상세 조회는 별도 요청으로 재시도해야 합니다.

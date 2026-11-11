@@ -77,3 +77,5 @@
 
 /* 화면에는 안 보이고 스크린리더만 읽는 텍스트 */
 .sr-only { position:absolute; width:1px; height:1px; margin:-1px; padding:0; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+
+.scene-skip {position:absolute;top:1rem;right:1rem;z-index:8;padding:.48rem .85rem;border:1px solid #a99c83;border-radius:.3rem;background:#211e1bed;color:#fff;cursor:pointer;font:inherit;}

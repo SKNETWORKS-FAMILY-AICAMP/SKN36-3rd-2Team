@@ -26,3 +26,43 @@ div[role=button].box { cursor: pointer; }
 .left { margin-right: auto; align-self: center; font-size: 13px; color: var(--paper-400); }
 
 .bg { position: absolute; inset: 0; }
+
+/* Issue #58: team ZIP visual integration (keeps dev-only styles above) */
+.page { position: relative; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+.dim { position: absolute; inset: 0; background: rgba(5,6,8,.35); pointer-events: none; }
+.page > header { position: relative; z-index: 2; background: rgba(10,9,8,.7); backdrop-filter: blur(4px); }
+.main { position: relative; z-index: 1; flex: 1; display: flex; align-items: flex-end; justify-content: center; padding: 24px 32px 40px; }
+.box { width: min(960px, 100%); padding: 24px 32px 22px; background: rgba(10,9,8,.86); border: 1px solid var(--brass-700); box-shadow: var(--shadow-deep); }
+div[role=button].box { cursor: pointer; }
+.place { font-family: var(--font-mono); font-size: 14px; letter-spacing: .12em; color: var(--brass-400); }
+.line { font-family: var(--font-serif); font-size: 20px; line-height: 1.8; color: var(--paper-100); word-break: keep-all; }
+.more { display: block; margin-top: 12px; text-align: right; font-size: 14px; color: var(--paper-300); animation: nudge 1.6s infinite; }
+.skipBtn { position: fixed; top: 64px; right: 22px; z-index: 5; padding: 8px 12px; font-size: 14px; letter-spacing: .06em; background: none; border: 1px solid transparent; cursor: pointer; color: var(--paper-400); }
+.skipBtn:hover { color: var(--paper-100); border-color: var(--ash-500); }
+@keyframes nudge { 50% { opacity: .4; } }
+.places { display: flex; flex-wrap: wrap; gap: 10px; margin: 14px 0 16px; }
+.pl { padding: 10px 16px; font-size: 15px; color: var(--paper-200); background: var(--ink-800); border: 1px solid var(--ink-600); cursor: pointer; }
+.pl:hover { border-color: var(--brass-500); }
+.cur { border-color: var(--brass-400); color: var(--brass-400); background: rgba(176,141,79,.12); }
+.pl small { color: var(--brass-400); }
+.obs { min-height: 64px; font-family: var(--font-serif); font-size: 18px; line-height: 1.8; color: var(--paper-100); word-break: keep-all; }
+.actions { display: flex; justify-content: flex-end; margin-top: 10px; }
+.go { padding: 12px 22px; font-size: 15px; background: var(--brass-500); color: var(--ink-950); border: 0; cursor: pointer; }
+.go:hover { background: var(--brass-400); }
+@media (max-width: 900px) { .main { padding: 14px 14px 22px; } .box { padding: 18px; } .line, .obs { font-size: 16px; } }
+
+.count { margin-left: 12px; color: var(--paper-400); letter-spacing: 0; font-family: var(--font-sans); }
+.new { display: inline-block; width: 7px; height: 7px; margin-left: 8px; border-radius: 50%; background: var(--blood-400); vertical-align: middle; animation: nudge 1.6s infinite; }
+.left { margin-right: auto; align-self: center; font-size: 13px; color: var(--paper-400); }
+
+.bg { position: absolute; inset: 0; }
+
+.timeline { display: grid; gap: 10px; padding: 4px 0 2px; }
+.tl { font-family: var(--font-serif); font-size: 20px; letter-spacing: .04em; color: var(--paper-200); }
+.tlNow { color: var(--brass-400); }
+@media (max-width: 900px) { .tl { font-size: 16px; } }
+
+.scenePhoto { position: absolute; z-index: 2; right: clamp(16px, 5vw, 72px); top: 84px; width: min(400px, 31vw); padding: 10px 10px 6px; background: #efe6cf; box-shadow: 0 16px 34px rgba(0,0,0,.7); }
+.scenePhoto img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; background: #111; }
+.scenePhoto figcaption { margin-top: 6px; text-align: center; font-family: var(--font-serif); font-size: 14px; letter-spacing: .12em; color: #3a2e1c; }
+@media (max-width: 900px) { .scenePhoto { width: min(250px, 62vw); top: 70px; right: 12px; } }

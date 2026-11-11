@@ -25,14 +25,40 @@ export default function Story() {
   const navigate = useNavigate()
   const first = useGameStore((s) => s.session?.unlockedNpcs[0]) ?? 'C01'
   const ensure = useGameStore((s) => s.ensureSession)
-  useEffect(() => { void ensure() }, [ensure])
   const [beat, setBeat] = useState(() => {
     try { return Number(localStorage.getItem('serin-story-beat')) || 0 } catch { return 0 }
   })
+  const [sessionReady, setSessionReady] = useState(false)
+  const [sessionError, setSessionError] = useState<string | null>(null)
   const [place, setPlace] = useState<(typeof PLACES)[number] | null>(null)
   const [seen, setSeen] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem('serin-seen-places') ?? '[]') as string[] } catch { return [] }
   })
+  // 서버 세션 확인/재생성 후 진행 기록을 다시 읽습니다.
+  // 새 세션이 만들어지면 gameStore가 이전 브라우저 기록을 초기화합니다.
+  useEffect(() => {
+    let active = true
+    void ensure().then(() => {
+      if (!active) return
+      if (!useGameStore.getState().session) {
+        throw new Error('게임 세션을 불러오지 못했습니다.')
+      }
+      try {
+        const raw = Number(localStorage.getItem('serin-story-beat') ?? '0')
+        setBeat(Number.isFinite(raw) ? Math.max(0, Math.min(raw, OPENING.length)) : 0)
+      } catch { setBeat(0) }
+      try {
+        const raw: unknown = JSON.parse(localStorage.getItem('serin-seen-places') ?? '[]')
+        const allowed = new Set<string>(PLACES.map((p) => p.key))
+        setSeen(Array.isArray(raw) ? raw.filter((k): k is string => typeof k === 'string' && allowed.has(k)) : [])
+      } catch { setSeen([]) }
+      setSessionReady(true)
+    }).catch((error: unknown) => {
+      if (active) setSessionError(error instanceof Error ? error.message : '서버 연결에 실패했습니다.')
+    })
+    return () => { active = false }
+  }, [ensure])
+  const [photoMissing, setPhotoMissing] = useState(false)
   const intro = beat < OPENING.length
 
   const next = () => setBeat((b) => {
@@ -53,6 +79,24 @@ export default function Story() {
     })
   }
 
+  if (!sessionReady) {
+    return (
+      <div className={styles.page}>
+        <TopNav />
+        <main className={styles.main}>
+          <section className={styles.box} role={sessionError ? 'alert' : 'status'}>
+            <p className={styles.line}>{sessionError ?? '사건 기록을 불러오는 중입니다.'}</p>
+            {sessionError && (
+              <button type="button" className={styles.go} onClick={() => navigate('/')}>
+                메인 화면으로
+              </button>
+            )}
+          </section>
+        </main>
+      </div>
+    )
+  }
+
   return (
     <div className={styles.page}>
       <AnimatePresence mode="sync">
@@ -69,6 +113,26 @@ export default function Story() {
       </AnimatePresence>
       <div className={styles.dim} />
       <TopNav />
+      <AnimatePresence>
+        {place?.key === 'stairs' && !photoMissing && (
+          <motion.figure
+            key="scene-photo"
+            className={styles.scenePhoto}
+            initial={{ opacity: 0, y: 10, rotate: 4 }}
+            animate={{ opacity: 1, y: 0, rotate: 2 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.5 }}
+          >
+            <img
+              src={`${import.meta.env.BASE_URL}assets/scene/victim_stairs.webp`}
+              alt="사건 현장 사진 — 내부 계단 아래"
+              draggable={false}
+              onError={() => setPhotoMissing(true)}
+            />
+            <figcaption>사건 현장</figcaption>
+          </motion.figure>
+        )}
+      </AnimatePresence>
       <main className={styles.main}>
         <AnimatePresence mode="wait">
           {intro ? (

@@ -94,3 +94,36 @@ li:nth-child(even) .polaroid { transform: rotate(1.4deg); }
 .collectButton { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; color: var(--paper-100); background: var(--ink-700); border: 1px solid var(--brass-500); font: inherit; font-size: 12px; cursor: pointer; }
 .collectButton:disabled { opacity: .45; cursor: default; }
 .collectError { flex-basis: 100%; color: var(--blood-400); font-size: 12px; }
+
+
+/* Issue #59 — NPC 메시지 200자 제한 */
+
+.messageField {
+  position: relative;
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+.composer .messageField textarea {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  padding-right: 78px;
+}
+
+.charCount {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.2;
+  color: var(--paper-400);
+  pointer-events: none;
+  user-select: none;
+}
+
+.charCountLimit {
+  color: var(--blood-400);
+  font-weight: 600;
+}

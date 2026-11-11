@@ -1,8 +1,11 @@
 """Issue #63 - NPC 대화 API 검증."""
 
+"""Issue #63 - NPC 대화 API 검증."""
+
+import pytest
 from fastapi.testclient import TestClient
 
-from crimescene.api.app import create_app
+from crimescene.api.app import ChatRequest, create_app
 from crimescene.trigger.atomic_dialogue import SQLiteCase001Repository
 
 
@@ -102,3 +105,40 @@ def test_other_player_cannot_chat(tmp_path):
         )
 
         assert response.status_code == 404
+
+
+def test_chat_accepts_200_characters():
+    question = "가" * 200
+
+    request = ChatRequest(question=question)
+
+    assert request.question == question
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"question": "가" * 201},
+        {
+            "question": "가" * 201,
+            "presentedEvidenceId": "E01",
+        },
+        {"question": ""},
+        {"question": " " * 200},
+    ],
+)
+def test_chat_rejects_invalid_question_length(
+    tmp_path,
+    payload,
+):
+    app, _ = make_app(tmp_path)
+
+    with TestClient(app) as client:
+        session_id = start_game(client)
+
+        response = client.post(
+            f"/api/games/{session_id}/chat",
+            json=payload,
+        )
+
+        assert response.status_code == 422

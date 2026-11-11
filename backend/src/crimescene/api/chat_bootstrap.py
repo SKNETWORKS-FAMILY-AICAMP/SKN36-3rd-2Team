@@ -273,7 +273,7 @@ def load_chat_runtime() -> Iterator[ChatRuntime]:
         }:
             resources.encoder.encode_query("학교 기록")
             resources.embedder.embed_query("학교 기록")
-            
+
         yield ChatRuntime(
             resources=resources,
             policies=policies,

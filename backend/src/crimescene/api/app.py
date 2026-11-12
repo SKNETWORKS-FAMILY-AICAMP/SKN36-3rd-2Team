@@ -1,4 +1,6 @@
 """Issue #62 - 게임 시작, 저장, 이어하기 및 NPC 선택 API."""
+import os
+from pathlib import Path
 
 import hashlib
 import hmac
@@ -7,6 +9,7 @@ from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager
 
 from fastapi import Cookie, FastAPI, HTTPException, Request, Response
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from neo4j.exceptions import Neo4jError, ServiceUnavailable, SessionExpired
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -1211,6 +1214,91 @@ def create_app(
             acquiredBy=None,  # 획득 경로는 현재 GameState에 저장되지 않습니다.
             confirmedRelations=confirmed_relations,
             documents=documents,
+        )
+
+    # ========================================================
+    # API: 획득한 증거 사진 조회
+    # ========================================================
+
+    @app.get(
+        "/api/games/{session_id}/evidence/{evidence_id}/photo",
+        response_class=FileResponse,
+    )
+    def get_evidence_photo(
+        session_id: str,
+        evidence_id: str,
+        request: Request,
+        thumbnail: bool = False,
+        case001_owner: str | None = Cookie(default=None),
+    ) -> FileResponse:
+        """세션 소유자에게 획득한 증거 사진만 제공합니다."""
+
+        # 기존 세션 소유권 검증 재사용
+        state = load_owned_request(
+            session_id, request, case001_owner
+        )
+
+        # 미획득 증거는 존재 여부까지 숨깁니다.
+        evidence_state = state.evidence.get(evidence_id)
+        if (
+            evidence_state is None
+            or evidence_state.stage not in {"found", "resolved"}
+        ):
+            raise HTTPException(
+                status_code=404,
+                detail="증거를 찾을 수 없습니다.",
+            )
+
+        # 이미지 디렉터리는 환경변수로 설정합니다.
+        image_dir_raw = os.getenv(
+            "CRIMESCENE_EVIDENCE_IMAGE_DIR",
+            ".local/case001_photos",
+        )
+
+        image_dir = Path(image_dir_raw).expanduser()
+        if not image_dir.is_absolute():
+            backend_root = Path(__file__).resolve().parents[3]
+            image_dir = backend_root / image_dir
+
+        image_dir = image_dir.resolve()
+
+        # 별도 썸네일이 없다면 원본을 반환합니다.
+        stems = (
+            (f"{evidence_id}_thumb", evidence_id)
+            if thumbnail
+            else (evidence_id,)
+        )
+
+        extensions = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".webp": "image/webp",
+        }
+
+        for stem in stems:
+            for extension, media_type in extensions.items():
+                image_path = (
+                    image_dir / f"{stem}{extension}"
+                ).resolve()
+
+                # 이미지 디렉터리 밖의 파일 접근 방지
+                if not image_path.is_relative_to(image_dir):
+                    continue
+
+                if image_path.is_file():
+                    return FileResponse(
+                        path=image_path,
+                        media_type=media_type,
+                        headers={
+                            "Cache-Control": "private, no-store",
+                            "X-Content-Type-Options": "nosniff",
+                        },
+                    )
+
+        raise HTTPException(
+            status_code=404,
+            detail="증거 이미지 파일이 없습니다.",
         )
 
     # API: 게임 진행률 조회

@@ -89,3 +89,5 @@ backend/.local/
 
 /backend/data/game_state.sqlite3
 /backend/data/scenario.zip
+# Django development database
+/backend/django_service/db.sqlite3*

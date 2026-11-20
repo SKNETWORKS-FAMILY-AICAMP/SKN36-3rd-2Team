@@ -12,7 +12,7 @@
 | 01-codebase-analysis.md | 기존 FastAPI 분석 및 테스트 |
 | 02-django-architecture.md | Django 책임 범위 설계 (완료) |
 | 03-api-contract-v3.md | API 계약 v3.0 (완료) |
-| 04-setup-and-tests.md | Django 초기 구축 및 검증 (예정) |
+| 04-setup-and-tests.md | Django 초기 구축 및 검증 (완료) |
 
 ## 진행 현황
 
@@ -22,7 +22,7 @@
 - [ ] 기존 아키텍처 분석 문서 검토 완료
 - [x] Django 아키텍처 확정
 - [x] API 계약 v3.0 작성
-- [ ] Django + DRF 구축 및 검증
+- [x] Django + DRF 구축 및 검증
 
 ## 개발 원칙
 

@@ -24,6 +24,20 @@
 - [x] API 계약 v3.0 작성
 - [x] Django + DRF 구축 및 검증
 
+### Issue #99 — Django Health API 및 자동화 테스트
+
+- [x] DRF APIView 기반 Health API 구현
+- [x] `GET /api/health/` 라우팅
+- [x] HTTP 200 및 JSON 응답 검증
+- [x] 비로그인 접근 허용 (`AllowAny`)
+- [x] POST 요청 405 응답 검증
+- [x] APITestCase 자동화 테스트 3개 통과
+- [x] Django 전체 테스트 탐색 및 실행
+
+**테스트 결과:** 3 passed / 0 failed
+
+**상세 문서:** [05-health-api-tests.md](./05-health-api-tests.md)
+
 ## 개발 원칙
 
 - 기존 FastAPI 게임 상태 관리 유지

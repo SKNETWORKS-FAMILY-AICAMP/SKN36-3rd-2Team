@@ -4,6 +4,7 @@
 from django.core.validators import RegexValidator
 from django.db import models
 from django.core.exceptions import ValidationError
+from django.utils import timezone
 
 class Case(models.Model):
     """게임 사건의 기본 정보를 관리합니다."""
@@ -463,3 +464,129 @@ class StoryEvent(models.Model):
 
     def __str__(self) -> str:
         return f"{self.event_key} - {self.trigger_type}"
+
+
+class ContentReleaseQuerySet(models.QuerySet):
+    """게시된 콘텐츠의 대량 수정 및 삭제를 차단합니다."""
+
+    def update(self, **kwargs):
+        raise ValidationError(
+            "ContentRelease의 대량 수정은 허용되지 않습니다."
+        )
+
+    def delete(self):
+        raise ValidationError(
+            "ContentRelease의 대량 삭제는 허용되지 않습니다."
+        )
+
+    def bulk_update(self, objs, fields, batch_size=None):
+        raise ValidationError(
+            "ContentRelease의 대량 수정은 허용되지 않습니다."
+        )
+
+    def bulk_create(
+        self,
+        objs,
+        batch_size=None,
+        ignore_conflicts=False,
+        update_conflicts=False,
+        update_fields=None,
+        unique_fields=None,
+    ):
+        raise ValidationError(
+            "ContentRelease의 대량 생성은 허용되지 않습니다. "
+            "검증된 단건 생성 경로를 사용해야 합니다."
+        )
+
+class ContentRelease(models.Model):
+    """사건별 게시 콘텐츠의 버전과 스냅샷을 관리합니다."""
+    objects = ContentReleaseQuerySet.as_manager()
+    case = models.ForeignKey(
+        Case,
+        on_delete=models.PROTECT,
+        related_name="releases",
+        verbose_name="대상 사건",
+    )
+
+    version = models.CharField(
+        max_length=30,
+        validators=[
+            RegexValidator(
+                regex=r"^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$",
+                message="버전은 v1.0.0 형식이어야 합니다.",
+            )
+        ],
+        verbose_name="게시 버전",
+    )
+
+    manifest = models.JSONField(
+        verbose_name="콘텐츠 스냅샷",
+    )
+
+    checksum = models.CharField(
+        max_length=71,
+        validators=[
+            RegexValidator(
+                regex=r"^sha256:[0-9a-f]{64}$",
+                message="체크섬은 sha256: + 64자리 소문자 16진수여야 합니다.",
+            )
+        ],
+        verbose_name="SHA-256 체크섬",
+    )
+
+    published_at = models.DateTimeField(
+        default=timezone.now,
+        editable=False,
+        verbose_name="게시 시각",
+    )
+
+    def clean(self):
+        """스냅샷의 기본 구조를 검증합니다."""
+        super().clean()
+
+        if not isinstance(self.manifest, dict):
+            raise ValidationError({
+                "manifest": "콘텐츠 스냅샷은 JSON 객체여야 합니다."
+            })
+
+    def save(self, *args, **kwargs):
+        """최초 생성만 허용하고 게시 후 수정을 거부합니다."""
+        if not self._state.adding:
+            raise ValidationError(
+                "게시된 ContentRelease는 수정할 수 없습니다."
+            )
+
+        # PK를 직접 지정하여 기존 행을 덮어쓰는 것도 방지합니다.
+        if self.pk is not None and type(self).objects.filter(
+            pk=self.pk
+        ).exists():
+            raise ValidationError(
+                "이미 존재하는 ContentRelease는 수정할 수 없습니다."
+            )
+
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        """게시된 배포 기록의 개별 삭제를 차단합니다."""
+        if self.pk is not None:
+            raise ValidationError(
+                "게시된 ContentRelease는 삭제할 수 없습니다."
+            )
+
+        return super().delete(*args, **kwargs)
+
+    class Meta:
+        db_table = "content_contentrelease"
+        verbose_name = "콘텐츠 게시 버전"
+        verbose_name_plural = "콘텐츠 게시 버전 목록"
+        ordering = ["-published_at", "-pk"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["case", "version"],
+                name="unique_release_case_version",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.case.case_id} - {self.version}"

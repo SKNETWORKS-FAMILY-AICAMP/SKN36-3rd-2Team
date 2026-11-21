@@ -887,3 +887,208 @@ class ContentAdminTests(TestCase):
                 pk=self.release.pk
             ).exists()
         )
+
+
+class ContentAdminFormIntegrationTests(TestCase):
+    """관리자 입력 폼에서 콘텐츠 무결성이 유지되는지 검증합니다."""
+
+    @classmethod
+    def setUpTestData(cls):
+        user_model = get_user_model()
+        cls.admin_user = user_model.objects.create_superuser(
+            username="integration_admin",
+            email="integration@example.com",
+            password="TestPassword123!",
+        )
+
+        cls.case = Case.objects.create(
+            case_id="CASE-001",
+            title="통합 테스트 사건",
+        )
+        cls.other_case = Case.objects.create(
+            case_id="CASE-002",
+            title="다른 테스트 사건",
+        )
+
+        cls.chapter = Chapter.objects.create(
+            case=cls.case,
+            code="CH01",
+            order=1,
+            title="첫 번째 챕터",
+        )
+
+        cls.other_character = Character.objects.create(
+            case=cls.other_case,
+            character_id="C01",
+            name="다른 사건 NPC",
+        )
+
+        cls.e01 = Evidence.objects.create(
+            case=cls.case,
+            evidence_id="E01",
+            name="첫 번째 증거",
+        )
+        cls.e02 = Evidence.objects.create(
+            case=cls.case,
+            evidence_id="E02",
+            name="두 번째 증거",
+        )
+        cls.e03 = Evidence.objects.create(
+            case=cls.case,
+            evidence_id="E03",
+            name="세 번째 증거",
+        )
+        cls.other_evidence = Evidence.objects.create(
+            case=cls.other_case,
+            evidence_id="E01",
+            name="다른 사건 증거",
+        )
+
+    def setUp(self):
+        self.client.force_login(self.admin_user)
+
+    def post_add(self, model_name, data):
+        url = reverse(f"admin:content_{model_name}_add")
+        return self.client.post(url, data=data)
+
+    def test_chapter_admin_create(self):
+        """관리자 폼으로 정상적인 챕터를 생성합니다."""
+        response = self.post_add("chapter", {
+            "case": self.case.pk,
+            "code": "CH02",
+            "order": 2,
+            "title": "두 번째 챕터",
+            "summary": "",
+            "metadata": "{}",
+            "_save": "Save",
+        })
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(
+            Chapter.objects.filter(
+                case=self.case,
+                code="CH02",
+            ).exists()
+        )
+
+    def test_character_admin_create(self):
+        """관리자 폼으로 정상적인 NPC를 생성합니다."""
+        response = self.post_add("character", {
+            "case": self.case.pk,
+            "character_id": "C02",
+            "name": "테스트 NPC",
+            "profile": "공개 프로필",
+            "metadata": "{}",
+            "_save": "Save",
+        })
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(
+            Character.objects.filter(
+                case=self.case,
+                character_id="C02",
+            ).exists()
+        )
+
+    def test_evidence_cross_case_holder_rejected(self):
+        """다른 사건의 NPC를 증거에 연결할 수 없습니다."""
+        response = self.post_add("evidence", {
+            "case": self.case.pk,
+            "evidence_id": "E04",
+            "name": "잘못된 증거",
+            "holder": self.other_character.pk,
+            "score": 10,
+            "metadata": "{}",
+            "_save": "Save",
+        })
+
+        self.assertEqual(response.status_code, 200)
+        errors = response.context["adminform"].form.errors
+        self.assertIn("holder", errors)
+        self.assertFalse(
+            Evidence.objects.filter(
+                case=self.case,
+                evidence_id="E04",
+            ).exists()
+        )
+
+    def test_prerequisite_cross_case_rejected(self):
+        """Admin에서 사건 간 증거 관계를 생성할 수 없습니다."""
+        response = self.post_add("evidenceprerequisite", {
+            "dependent": self.e02.pk,
+            "prerequisite": self.other_evidence.pk,
+            "_save": "Save",
+        })
+
+        self.assertEqual(response.status_code, 200)
+        errors = response.context["adminform"].form.errors
+        self.assertIn("prerequisite", errors)
+        self.assertEqual(
+            EvidencePrerequisite.objects.count(),
+            0,
+        )
+
+    def test_prerequisite_cycle_rejected(self):
+        """Admin에서도 순환하는 증거 관계를 차단합니다."""
+        EvidencePrerequisite.objects.create(
+            dependent=self.e02,
+            prerequisite=self.e01,
+        )
+        EvidencePrerequisite.objects.create(
+            dependent=self.e03,
+            prerequisite=self.e02,
+        )
+
+        response = self.post_add("evidenceprerequisite", {
+            "dependent": self.e01.pk,
+            "prerequisite": self.e03.pk,
+            "_save": "Save",
+        })
+
+        self.assertEqual(response.status_code, 200)
+        errors = response.context["adminform"].form.errors
+        self.assertIn("prerequisite", errors)
+        self.assertEqual(
+            EvidencePrerequisite.objects.count(),
+            2,
+        )
+
+    def test_story_event_chapter_mismatch_rejected(self):
+        """이벤트 키가 소속 챕터와 다르면 저장하지 않습니다."""
+        response = self.post_add("storyevent", {
+            "chapter": self.chapter.pk,
+            "event_key": "EVT-CH02-001",
+            "trigger_type": "CHAPTER_STARTED",
+            "conditions": "{}",
+            "payload": "{}",
+            "_save": "Save",
+        })
+
+        self.assertEqual(response.status_code, 200)
+        errors = response.context["adminform"].form.errors
+        self.assertIn("event_key", errors)
+        self.assertFalse(
+            StoryEvent.objects.filter(
+                event_key="EVT-CH02-001"
+            ).exists()
+        )
+
+    def test_story_event_invalid_conditions_rejected(self):
+        """조건 JSON이 배열이면 저장을 차단합니다."""
+        response = self.post_add("storyevent", {
+            "chapter": self.chapter.pk,
+            "event_key": "EVT-CH01-001",
+            "trigger_type": "EVIDENCE_COLLECTED",
+            "conditions": "[]",
+            "payload": "{}",
+            "_save": "Save",
+        })
+
+        self.assertEqual(response.status_code, 200)
+        errors = response.context["adminform"].form.errors
+        self.assertIn("conditions", errors)
+        self.assertFalse(
+            StoryEvent.objects.filter(
+                event_key="EVT-CH01-001"
+            ).exists()
+        )

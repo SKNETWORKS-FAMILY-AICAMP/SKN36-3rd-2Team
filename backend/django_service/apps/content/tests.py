@@ -16,6 +16,8 @@ from .models import (
 )
 from django.db.models.deletion import ProtectedError
 from .models import ContentRelease
+from django.contrib.auth import get_user_model
+from django.urls import reverse
 
 class ContentModelTests(TestCase):
     """Case, Chapter, Character 모델의 무결성을 검증합니다."""
@@ -725,4 +727,163 @@ class ContentReleaseTests(TestCase):
 
         self.assertTrue(
             Case.objects.filter(pk=self.case.pk).exists()
+        )
+
+
+class ContentAdminTests(TestCase):
+    """Django Admin의 화면 접근, 검색 및 권한을 검증합니다."""
+
+    @classmethod
+    def setUpTestData(cls):
+        user_model = get_user_model()
+
+        cls.admin_user = user_model.objects.create_superuser(
+            username="admin_test",
+            email="admin@example.com",
+            password="TestPassword123!",
+        )
+
+        cls.staff_user = user_model.objects.create_user(
+            username="staff_test",
+            password="TestPassword123!",
+            is_staff=True,
+        )
+
+        cls.case = Case.objects.create(
+            case_id="CASE-001",
+            title="관리자 테스트 사건",
+        )
+
+        Case.objects.create(
+            case_id="CASE-002",
+            title="검색 제외 사건",
+        )
+
+        cls.release = ContentRelease.objects.create(
+            case=cls.case,
+            version="v1.0.0",
+            manifest={"chapters": []},
+            checksum="sha256:" + "a" * 64,
+        )
+
+    def setUp(self):
+        self.client.force_login(self.admin_user)
+
+    def test_all_admin_changelists_accessible(self):
+        """슈퍼유저가 7개 관리자 목록에 접근할 수 있습니다."""
+        models = (
+            "case",
+            "chapter",
+            "character",
+            "evidence",
+            "evidenceprerequisite",
+            "storyevent",
+            "contentrelease",
+        )
+
+        for model in models:
+            with self.subTest(model=model):
+                url = reverse(
+                    f"admin:content_{model}_changelist"
+                )
+                response = self.client.get(url)
+                self.assertEqual(response.status_code, 200)
+
+    def test_case_search(self):
+        """사건 ID 검색이 올바르게 작동합니다."""
+        url = reverse("admin:content_case_changelist")
+
+        response = self.client.get(
+            url,
+            {"q": "CASE-001"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            list(response.context["cl"].result_list),
+            [self.case],
+        )
+
+    def test_anonymous_access_redirected(self):
+        """미인증 사용자는 관리자 로그인으로 이동합니다."""
+        self.client.logout()
+
+        url = reverse("admin:content_case_changelist")
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/admin/login/", response["Location"])
+
+    def test_staff_without_permission_denied(self):
+        """모델 권한이 없는 직원의 접근을 차단합니다."""
+        self.client.force_login(self.staff_user)
+
+        urls = (
+            reverse("admin:content_case_changelist"),
+            reverse(
+                "admin:content_contentrelease_changelist"
+            ),
+        )
+
+        for url in urls:
+            with self.subTest(url=url):
+                response = self.client.get(url)
+                self.assertEqual(response.status_code, 403)
+
+    def test_release_detail_readonly_visible(self):
+        """슈퍼유저는 게시 버전 상세 정보를 조회할 수 있습니다."""
+        url = reverse(
+            "admin:content_contentrelease_change",
+            args=[self.release.pk],
+        )
+
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "v1.0.0")
+
+    def test_release_add_blocked(self):
+        """Admin을 통한 게시 버전 생성을 차단합니다."""
+        url = reverse(
+            "admin:content_contentrelease_add"
+        )
+
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_release_update_blocked(self):
+        """Admin을 통한 게시 버전 수정을 차단합니다."""
+        url = reverse(
+            "admin:content_contentrelease_change",
+            args=[self.release.pk],
+        )
+
+        response = self.client.post(
+            url,
+            {"version": "v2.0.0"},
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+        self.release.refresh_from_db()
+        self.assertEqual(self.release.version, "v1.0.0")
+
+    def test_release_delete_blocked(self):
+        """Admin을 통한 게시 버전 삭제를 차단합니다."""
+        url = reverse(
+            "admin:content_contentrelease_delete",
+            args=[self.release.pk],
+        )
+
+        response = self.client.post(
+            url,
+            {"post": "yes"},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertTrue(
+            ContentRelease.objects.filter(
+                pk=self.release.pk
+            ).exists()
         )

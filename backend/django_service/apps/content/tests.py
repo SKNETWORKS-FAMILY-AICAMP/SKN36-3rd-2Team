@@ -14,7 +14,8 @@ from .models import (
     EvidencePrerequisite,
     StoryEvent,
 )
-
+from django.db.models.deletion import ProtectedError
+from .models import ContentRelease
 
 class ContentModelTests(TestCase):
     """Case, Chapter, Character 모델의 무결성을 검증합니다."""
@@ -548,4 +549,180 @@ class EvidencePrerequisiteServiceTests(TestCase):
         self.assertEqual(
             EvidencePrerequisite.objects.count(),
             0,
+        )
+
+
+class ContentReleaseTests(TestCase):
+    """콘텐츠 게시 버전의 생성, 무결성 및 불변성을 검증합니다."""
+
+    def setUp(self):
+        self.case = Case.objects.create(
+            case_id="CASE-001",
+            title="게시 테스트 사건",
+        )
+        self.other_case = Case.objects.create(
+            case_id="CASE-002",
+            title="다른 사건",
+        )
+        self.manifest = {
+            "schema_version": 1,
+            "chapters": [],
+        }
+        # 형식 검증용 테스트 값이며 실제 manifest의 해시가 아닙니다.
+        self.checksum = "sha256:" + "a" * 64
+
+    def create_release(self, *, case=None, version="v1.0.0"):
+        return ContentRelease.objects.create(
+            case=case or self.case,
+            version=version,
+            manifest=self.manifest.copy(),
+            checksum=self.checksum,
+        )
+
+    def test_create_release(self):
+        """정상적인 게시 버전을 생성합니다."""
+        release = self.create_release()
+
+        self.assertIsNotNone(release.pk)
+        self.assertIsNotNone(release.published_at)
+        self.assertEqual(release.version, "v1.0.0")
+        self.assertEqual(self.case.releases.count(), 1)
+
+    def test_reject_duplicate_version(self):
+        """동일 사건에 같은 버전을 중복 게시할 수 없습니다."""
+        self.create_release()
+
+        with self.assertRaises(ValidationError):
+            self.create_release()
+
+        self.assertEqual(ContentRelease.objects.count(), 1)
+
+    def test_allow_same_version_for_different_case(self):
+        """서로 다른 사건에서는 같은 버전을 사용할 수 있습니다."""
+        self.create_release()
+        self.create_release(case=self.other_case)
+
+        self.assertEqual(ContentRelease.objects.count(), 2)
+
+    def test_reject_invalid_version(self):
+        """잘못된 버전 형식을 거부합니다."""
+        with self.assertRaises(ValidationError):
+            self.create_release(version="1.0.0")
+
+    def test_reject_invalid_checksum(self):
+        """잘못된 SHA-256 체크섬 형식을 거부합니다."""
+        with self.assertRaises(ValidationError):
+            ContentRelease.objects.create(
+                case=self.case,
+                version="v1.0.0",
+                manifest=self.manifest,
+                checksum="invalid",
+            )
+
+    def test_reject_invalid_manifest(self):
+        """스냅샷은 JSON 객체여야 합니다."""
+        with self.assertRaises(ValidationError):
+            ContentRelease.objects.create(
+                case=self.case,
+                version="v1.0.0",
+                manifest=["invalid"],
+                checksum=self.checksum,
+            )
+
+    def test_reject_instance_update(self):
+        """게시된 인스턴스를 수정할 수 없습니다."""
+        release = self.create_release()
+        release.version = "v2.0.0"
+
+        with self.assertRaises(ValidationError):
+            release.save()
+
+        release.refresh_from_db()
+        self.assertEqual(release.version, "v1.0.0")
+
+    def test_reject_instance_delete(self):
+        """게시된 인스턴스를 삭제할 수 없습니다."""
+        release = self.create_release()
+
+        with self.assertRaises(ValidationError):
+            release.delete()
+
+        self.assertTrue(
+            ContentRelease.objects.filter(pk=release.pk).exists()
+        )
+
+    def test_reject_queryset_update(self):
+        """QuerySet.update()를 차단합니다."""
+        release = self.create_release()
+
+        with self.assertRaises(ValidationError):
+            ContentRelease.objects.filter(
+                pk=release.pk
+            ).update(version="v2.0.0")
+
+        release.refresh_from_db()
+        self.assertEqual(release.version, "v1.0.0")
+
+    def test_reject_queryset_delete(self):
+        """QuerySet.delete()를 차단합니다."""
+        release = self.create_release()
+
+        with self.assertRaises(ValidationError):
+            ContentRelease.objects.filter(
+                pk=release.pk
+            ).delete()
+
+        self.assertEqual(ContentRelease.objects.count(), 1)
+
+    def test_reject_bulk_create(self):
+        """save() 검증을 우회하는 대량 생성을 차단합니다."""
+        release = ContentRelease(
+            case=self.case,
+            version="v1.0.0",
+            manifest=self.manifest,
+            checksum=self.checksum,
+        )
+
+        with self.assertRaises(ValidationError):
+            ContentRelease.objects.bulk_create([release])
+
+        self.assertEqual(ContentRelease.objects.count(), 0)
+
+    def test_reject_bulk_update(self):
+        """대량 수정을 차단합니다."""
+        release = self.create_release()
+        release.version = "v2.0.0"
+
+        with self.assertRaises(ValidationError):
+            ContentRelease.objects.bulk_update(
+                [release],
+                ["version"],
+            )
+
+        release.refresh_from_db()
+        self.assertEqual(release.version, "v1.0.0")
+
+    def test_reject_update_or_create(self):
+        """기존 게시 버전의 update_or_create 수정을 차단합니다."""
+        release = self.create_release()
+
+        with self.assertRaises(ValidationError):
+            ContentRelease.objects.update_or_create(
+                case=self.case,
+                version="v1.0.0",
+                defaults={"checksum": "sha256:" + "b" * 64},
+            )
+
+        release.refresh_from_db()
+        self.assertEqual(release.checksum, self.checksum)
+
+    def test_protect_case_deletion(self):
+        """게시 기록이 존재하는 사건의 삭제를 보호합니다."""
+        self.create_release()
+
+        with self.assertRaises(ProtectedError):
+            self.case.delete()
+
+        self.assertTrue(
+            Case.objects.filter(pk=self.case.pk).exists()
         )

@@ -5,8 +5,15 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import ProtectedError
 from django.test import TestCase
-
-from .models import Case, Chapter, Character
+from .services import create_evidence_prerequisite
+from .models import (
+    Case,
+    Chapter,
+    Character,
+    Evidence,
+    EvidencePrerequisite,
+    StoryEvent,
+)
 
 
 class ContentModelTests(TestCase):
@@ -131,4 +138,414 @@ class ContentModelTests(TestCase):
 
         self.assertTrue(
             Case.objects.filter(pk=self.case.pk).exists()
+        )
+
+
+class EvidenceStoryEventTests(TestCase):
+    """증거, 선행 관계, 스토리 이벤트의 무결성을 검증합니다."""
+
+    def setUp(self):
+        self.case = Case.objects.create(
+            case_id="CASE-001",
+            title="테스트 사건",
+        )
+
+        self.other_case = Case.objects.create(
+            case_id="CASE-002",
+            title="다른 사건",
+        )
+
+        self.chapter = Chapter.objects.create(
+            case=self.case,
+            code="CH01",
+            order=1,
+            title="첫 번째 챕터",
+        )
+
+        self.character = Character.objects.create(
+            case=self.case,
+            character_id="C01",
+            name="테스트 NPC",
+        )
+
+        self.e01 = Evidence.objects.create(
+            case=self.case,
+            evidence_id="E01",
+            name="첫 번째 증거",
+            holder=self.character,
+            score=1,
+        )
+
+        self.e02 = Evidence.objects.create(
+            case=self.case,
+            evidence_id="E02",
+            name="두 번째 증거",
+            score=2,
+        )
+
+        self.e03 = Evidence.objects.create(
+            case=self.case,
+            evidence_id="E03",
+            name="세 번째 증거",
+            score=3,
+        )
+
+    def test_evidence_creation(self):
+        """증거 생성 및 사건·NPC 관계를 검증합니다."""
+        self.assertEqual(self.e01.case, self.case)
+        self.assertEqual(self.e01.holder, self.character)
+        self.assertEqual(self.e01.score, 1)
+        self.assertEqual(self.case.evidence_items.count(), 3)
+
+    def test_invalid_evidence_id(self):
+        """E01~E30 범위를 벗어난 ID를 거부합니다."""
+        evidence = Evidence(
+            case=self.case,
+            evidence_id="E31",
+            name="잘못된 증거",
+        )
+
+        with self.assertRaises(ValidationError):
+            evidence.full_clean()
+
+    def test_duplicate_evidence_id(self):
+        """같은 사건에서 중복 증거 ID를 거부합니다."""
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                Evidence.objects.create(
+                    case=self.case,
+                    evidence_id="E01",
+                    name="중복 증거",
+                )
+
+    def test_negative_evidence_score(self):
+        """음수 점수는 허용하지 않습니다."""
+        evidence = Evidence(
+            case=self.case,
+            evidence_id="E04",
+            name="잘못된 점수",
+            score=-1,
+        )
+
+        with self.assertRaises(ValidationError):
+            evidence.full_clean()
+
+    def test_holder_must_belong_to_same_case(self):
+        """다른 사건의 NPC 연결을 거부합니다."""
+        other_character = Character.objects.create(
+            case=self.other_case,
+            character_id="C01",
+            name="다른 사건 NPC",
+        )
+
+        evidence = Evidence(
+            case=self.case,
+            evidence_id="E04",
+            name="잘못된 NPC 연결",
+            holder=other_character,
+        )
+
+        with self.assertRaises(ValidationError):
+            evidence.full_clean()
+
+    def test_prerequisite_creation(self):
+        """정상적인 선행 증거 관계를 생성합니다."""
+        relation = EvidencePrerequisite(
+            dependent=self.e02,
+            prerequisite=self.e01,
+        )
+
+        relation.full_clean()
+        relation.save()
+
+        self.assertEqual(
+            list(self.e02.prerequisites.all()),
+            [self.e01],
+        )
+
+    def test_duplicate_prerequisite(self):
+        """동일 선행 관계 중복을 거부합니다."""
+        EvidencePrerequisite.objects.create(
+            dependent=self.e02,
+            prerequisite=self.e01,
+        )
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                EvidencePrerequisite.objects.create(
+                    dependent=self.e02,
+                    prerequisite=self.e01,
+                )
+
+    def test_self_prerequisite(self):
+        """증거가 자기 자신을 요구할 수 없습니다."""
+        relation = EvidencePrerequisite(
+            dependent=self.e01,
+            prerequisite=self.e01,
+        )
+
+        with self.assertRaises(ValidationError):
+            relation.full_clean()
+
+    def test_cross_case_prerequisite(self):
+        """서로 다른 사건의 증거 연결을 거부합니다."""
+        other_evidence = Evidence.objects.create(
+            case=self.other_case,
+            evidence_id="E01",
+            name="다른 사건 증거",
+        )
+
+        relation = EvidencePrerequisite(
+            dependent=self.e02,
+            prerequisite=other_evidence,
+        )
+
+        with self.assertRaises(ValidationError):
+            relation.full_clean()
+
+    def test_circular_prerequisite(self):
+        """순환하는 선행 관계를 거부합니다."""
+        # E02 requires E01
+        EvidencePrerequisite.objects.create(
+            dependent=self.e02,
+            prerequisite=self.e01,
+        )
+
+        # E03 requires E02
+        EvidencePrerequisite.objects.create(
+            dependent=self.e03,
+            prerequisite=self.e02,
+        )
+
+        # E01 requires E03 → 순환 발생
+        relation = EvidencePrerequisite(
+            dependent=self.e01,
+            prerequisite=self.e03,
+        )
+
+        with self.assertRaises(ValidationError):
+            relation.full_clean()
+
+    def test_story_event_creation(self):
+        """스토리 이벤트가 정상적으로 생성됩니다."""
+        event = StoryEvent(
+            chapter=self.chapter,
+            event_key="EVT-CH01-001",
+            trigger_type=StoryEvent.TriggerType.EVIDENCE_COLLECTED,
+            conditions={"requiredEvidenceIds": ["E01"]},
+            payload={"title": "새로운 단서"},
+        )
+
+        event.full_clean()
+        event.save()
+
+        self.assertEqual(event.chapter, self.chapter)
+        self.assertEqual(
+            event.trigger_type,
+            StoryEvent.TriggerType.EVIDENCE_COLLECTED,
+        )
+
+    def test_invalid_story_event_conditions(self):
+        """이벤트 조건은 JSON 객체여야 합니다."""
+        event = StoryEvent(
+            chapter=self.chapter,
+            event_key="EVT-CH01-002",
+            trigger_type=StoryEvent.TriggerType.EVIDENCE_COLLECTED,
+            conditions=["E01"],
+            payload={},
+        )
+
+        with self.assertRaises(ValidationError):
+            event.full_clean()
+
+    def test_story_event_chapter_mismatch(self):
+        """이벤트 키와 소속 챕터는 일치해야 합니다."""
+        event = StoryEvent(
+            chapter=self.chapter,
+            event_key="EVT-CH02-001",
+            trigger_type=StoryEvent.TriggerType.EVIDENCE_COLLECTED,
+            conditions={},
+            payload={},
+        )
+
+        with self.assertRaises(ValidationError):
+            event.full_clean()
+
+    def test_invalid_story_event_trigger(self):
+        """정의되지 않은 이벤트 트리거를 거부합니다."""
+        event = StoryEvent(
+            chapter=self.chapter,
+            event_key="EVT-CH01-003",
+            trigger_type="INVALID_TRIGGER",
+            conditions={},
+            payload={},
+        )
+
+        with self.assertRaises(ValidationError):
+            event.full_clean()
+
+class EvidencePrerequisiteServiceTests(TestCase):
+    """증거 선행 관계 저장 서비스의 검증 및 트랜잭션을 테스트합니다."""
+
+    def setUp(self):
+        self.case = Case.objects.create(
+            case_id="CASE-001",
+            title="서비스 테스트 사건",
+        )
+        self.other_case = Case.objects.create(
+            case_id="CASE-002",
+            title="다른 사건",
+        )
+
+        self.e01 = Evidence.objects.create(
+            case=self.case,
+            evidence_id="E01",
+            name="첫 번째 증거",
+        )
+        self.e02 = Evidence.objects.create(
+            case=self.case,
+            evidence_id="E02",
+            name="두 번째 증거",
+        )
+        self.e03 = Evidence.objects.create(
+            case=self.case,
+            evidence_id="E03",
+            name="세 번째 증거",
+        )
+        self.other_evidence = Evidence.objects.create(
+            case=self.other_case,
+            evidence_id="E01",
+            name="다른 사건 증거",
+        )
+
+    def test_create_valid_relation(self):
+        """정상적인 증거 선행 관계가 저장되어야 합니다."""
+        relation = create_evidence_prerequisite(
+            dependent_id=self.e02.pk,
+            prerequisite_id=self.e01.pk,
+        )
+
+        self.assertIsNotNone(relation.pk)
+        self.assertEqual(relation.dependent, self.e02)
+        self.assertEqual(relation.prerequisite, self.e01)
+
+        self.assertTrue(
+            self.e02.prerequisites.filter(pk=self.e01.pk).exists()
+        )
+
+    def test_create_valid_chain(self):
+        """순환하지 않는 다단계 선행 관계를 허용합니다."""
+        create_evidence_prerequisite(
+            dependent_id=self.e02.pk,
+            prerequisite_id=self.e01.pk,
+        )
+        create_evidence_prerequisite(
+            dependent_id=self.e03.pk,
+            prerequisite_id=self.e02.pk,
+        )
+
+        self.assertEqual(
+            EvidencePrerequisite.objects.count(),
+            2,
+        )
+
+    def test_reject_duplicate_relation(self):
+        """동일한 관계를 중복 저장할 수 없습니다."""
+        create_evidence_prerequisite(
+            dependent_id=self.e02.pk,
+            prerequisite_id=self.e01.pk,
+        )
+
+        with self.assertRaises(ValidationError):
+            create_evidence_prerequisite(
+                dependent_id=self.e02.pk,
+                prerequisite_id=self.e01.pk,
+            )
+
+        self.assertEqual(
+            EvidencePrerequisite.objects.count(),
+            1,
+        )
+
+    def test_reject_self_reference(self):
+        """증거가 자기 자신을 선행 조건으로 가질 수 없습니다."""
+        with self.assertRaises(ValidationError):
+            create_evidence_prerequisite(
+                dependent_id=self.e01.pk,
+                prerequisite_id=self.e01.pk,
+            )
+
+        self.assertEqual(
+            EvidencePrerequisite.objects.count(),
+            0,
+        )
+
+    def test_reject_cross_case_relation(self):
+        """다른 사건에 속한 증거는 연결할 수 없습니다."""
+        with self.assertRaises(ValidationError):
+            create_evidence_prerequisite(
+                dependent_id=self.e02.pk,
+                prerequisite_id=self.other_evidence.pk,
+            )
+
+        self.assertEqual(
+            EvidencePrerequisite.objects.count(),
+            0,
+        )
+
+    def test_reject_circular_relation(self):
+        """순환 관계를 거부하고 기존 관계를 유지합니다."""
+        # E02 requires E01
+        create_evidence_prerequisite(
+            dependent_id=self.e02.pk,
+            prerequisite_id=self.e01.pk,
+        )
+
+        # E03 requires E02
+        create_evidence_prerequisite(
+            dependent_id=self.e03.pk,
+            prerequisite_id=self.e02.pk,
+        )
+
+        # E01 requires E03 → 순환 발생
+        with self.assertRaises(ValidationError):
+            create_evidence_prerequisite(
+                dependent_id=self.e01.pk,
+                prerequisite_id=self.e03.pk,
+            )
+
+        # 실패한 관계는 저장되지 않아야 합니다.
+        self.assertEqual(
+            EvidencePrerequisite.objects.count(),
+            2,
+        )
+
+    def test_reject_missing_evidence(self):
+        """존재하지 않는 증거 ID를 거부합니다."""
+        with self.assertRaises(ValidationError):
+            create_evidence_prerequisite(
+                dependent_id=self.e01.pk,
+                prerequisite_id=999999,
+            )
+
+        self.assertEqual(
+            EvidencePrerequisite.objects.count(),
+            0,
+        )
+
+    def test_reject_invalid_id_input(self):
+        """정수가 아니거나 0 이하인 ID를 거부합니다."""
+        invalid_values = [0, -1, True, "1", None]
+
+        for invalid_id in invalid_values:
+            with self.subTest(invalid_id=invalid_id):
+                with self.assertRaises(ValidationError):
+                    create_evidence_prerequisite(
+                        dependent_id=invalid_id,
+                        prerequisite_id=self.e01.pk,
+                    )
+
+        self.assertEqual(
+            EvidencePrerequisite.objects.count(),
+            0,
         )

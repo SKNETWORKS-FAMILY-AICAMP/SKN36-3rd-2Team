@@ -26,6 +26,15 @@ from .models import ContentRelease
 from django.contrib.auth import get_user_model
 from django.urls import reverse
 
+import json
+from io import StringIO
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from django.core.management import call_command
+import csv
+
+from django.core.management.base import CommandError
 class ContentModelTests(TestCase):
     """Case, Chapter, Character 모델의 무결성을 검증합니다."""
 
@@ -199,6 +208,37 @@ class EvidenceStoryEventTests(TestCase):
             name="세 번째 증거",
             score=3,
         )
+
+    def test_nullable_evidence_score(self):
+        """미확정 증거 점수를 NULL로 저장할 수 있어야 합니다."""
+        evidence = Evidence(
+            case=self.case,
+            evidence_id="E04",
+            name="점수 미확정 증거",
+            score=None,
+        )
+
+        evidence.full_clean()
+        evidence.save()
+        evidence.refresh_from_db()
+
+        self.assertIsNone(evidence.score)
+
+    def test_zero_score_distinct_from_null(self):
+        """명시적인 0점과 미확정 점수를 구분합니다."""
+        evidence = Evidence(
+            case=self.case,
+            evidence_id="E05",
+            name="0점 증거",
+            score=0,
+        )
+
+        evidence.full_clean()
+        evidence.save()
+        evidence.refresh_from_db()
+
+        self.assertEqual(evidence.score, 0)
+        self.assertIsNotNone(evidence.score)
 
     def test_evidence_creation(self):
         """증거 생성 및 사건·NPC 관계를 검증합니다."""
@@ -1381,3 +1421,1456 @@ class ExtendedContentModelTests(TestCase):
                 completion_rule={},
                 is_active=True,
             )
+
+
+class FoundationImportCommandTests(TestCase):
+    """CASE-001 기초 데이터 Import의 롤백과 멱등성을 검증합니다."""
+
+    def setUp(self):
+        self.temp_dir = TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+
+        self.source_root = Path(self.temp_dir.name)
+        data_dir = self.source_root / "legacy_source" / "data"
+        data_dir.mkdir(parents=True)
+
+        npc_ids = [f"C{i:02d}" for i in range(1, 11)]
+        evidence_ids = [f"E{i:02d}" for i in range(1, 11)]
+
+        sources = {
+            "character_registry.json": {
+                npc_id: {} for npc_id in npc_ids
+            },
+            "characters.json": [
+                {
+                    "id": npc_id,
+                    "name": f"NPC {npc_id}",
+                    "secret_2026": "INTERNAL_SECRET",
+                }
+                for npc_id in npc_ids
+            ],
+            "evidence_rules.json": {
+                evidence_id: {
+                    "name": f"Evidence {evidence_id}",
+                    "score": 1,
+                    "holder": "C01",
+                    "prerequisites": (
+                        ["E01"] if evidence_id == "E02" else []
+                    ),
+                }
+                for evidence_id in evidence_ids
+            },
+        }
+
+        for filename, data in sources.items():
+            (data_dir / filename).write_text(
+                json.dumps(data, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+    def run_import(self, *, apply=False):
+        output = StringIO()
+
+        call_command(
+            "import_case001_foundation",
+            legacy_root=self.source_root,
+            apply=apply,
+            stdout=output,
+        )
+
+        return output.getvalue()
+
+    def test_dry_run_rolls_back(self):
+        """Dry Run에서는 데이터가 저장되지 않아야 합니다."""
+        output = self.run_import()
+
+        self.assertIn("DRY RUN", output)
+        self.assertFalse(
+            Case.objects.filter(case_id="CASE-001").exists()
+        )
+        self.assertEqual(Chapter.objects.count(), 0)
+        self.assertEqual(Character.objects.count(), 0)
+        self.assertEqual(Evidence.objects.count(), 0)
+        self.assertEqual(EvidencePrerequisite.objects.count(), 0)
+
+    def test_apply_is_idempotent(self):
+        """두 번 실행해도 동일한 데이터가 중복 생성되지 않습니다."""
+        first = self.run_import(apply=True)
+        second = self.run_import(apply=True)
+
+        self.assertIn("IMPORT COMMITTED", first)
+        self.assertIn("IMPORT COMMITTED", second)
+        self.assertIn("case: +0", second)
+        self.assertIn("chapter: +0", second)
+        self.assertIn("character: +0", second)
+        self.assertIn("evidence: +0", second)
+        self.assertIn("prerequisite: +0", second)
+
+        self.assertEqual(Case.objects.count(), 1)
+        self.assertEqual(Chapter.objects.count(), 5)
+        self.assertEqual(Character.objects.count(), 10)
+        self.assertEqual(Evidence.objects.count(), 10)
+        self.assertEqual(EvidencePrerequisite.objects.count(), 1)
+
+        # 비공개 NPC 정보가 공개 프로필에 포함되지 않았는지 확인합니다.
+        npc = Character.objects.get(character_id="C01")
+        self.assertNotIn("INTERNAL_SECRET", npc.profile)
+        self.assertNotIn("INTERNAL_SECRET", str(npc.metadata))
+
+
+class ExtendedEvidenceImportCommandTests(TestCase):
+    """E11~E30 Import의 롤백, 멱등성 및 참조 무결성을 검증합니다."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.case = Case.objects.create(
+            case_id="CASE-001",
+            title="마지막 기록: 졸업하지 못한 밤",
+        )
+
+        for number in range(5):
+            Chapter.objects.create(
+                case=cls.case,
+                code=f"CH{number:02d}",
+                order=number,
+                title=f"CH{number:02d}",
+            )
+
+        cls.character = Character.objects.create(
+            case=cls.case,
+            character_id="C01",
+            name="테스트 NPC",
+        )
+
+        cls.baseline = Evidence.objects.create(
+            case=cls.case,
+            evidence_id="E01",
+            name="기존 증거",
+            holder=cls.character,
+            score=5,
+        )
+
+    def setUp(self):
+        self.temp_dir = TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        self.csv_path = Path(self.temp_dir.name) / "evidence.csv"
+
+    def write_source(self, *, invalid_holder=False):
+        """테스트용 증거 20건을 생성합니다."""
+        columns = [
+            "evidence_id",
+            "title",
+            "holder_npc_id",
+            "chapter",
+            "score_points",
+            "access_scope",
+            "canon_status",
+        ]
+
+        with self.csv_path.open(
+            "w", encoding="utf-8-sig", newline=""
+        ) as file:
+            writer = csv.DictWriter(file, fieldnames=columns)
+            writer.writeheader()
+
+            for number in range(11, 31):
+                writer.writerow({
+                    "evidence_id": f"E{number:02d}",
+                    "title": f"테스트 증거 E{number:02d}",
+                    "holder_npc_id": (
+                        "C99"
+                        if invalid_holder and number == 30
+                        else "C01"
+                    ),
+                    "chapter": "CH01",
+                    "score_points": "미정(백엔드)",
+                    "access_scope": "UNLOCKED_ONLY",
+                    "canon_status": "초안",
+                })
+
+    def run_import(self, *, apply=False):
+        output = StringIO()
+
+        call_command(
+            "import_case001_extended_evidence",
+            source=self.csv_path,
+            apply=apply,
+            stdout=output,
+        )
+
+        return output.getvalue()
+
+    def test_dry_run_rolls_back(self):
+        """Dry Run은 신규 증거를 DB에 저장하지 않습니다."""
+        self.write_source()
+
+        output = self.run_import()
+
+        self.assertIn("DRY RUN", output)
+        self.assertEqual(
+            Evidence.objects.filter(case=self.case).count(),
+            1,
+        )
+
+    def test_apply_is_idempotent(self):
+        """동일 파일을 두 번 Import해도 중복 생성되지 않습니다."""
+        self.write_source()
+
+        first = self.run_import(apply=True)
+        second = self.run_import(apply=True)
+
+        self.assertIn("New evidence: 20", first)
+        self.assertIn("New evidence: 0", second)
+        self.assertIn("Existing evidence: 20", second)
+
+        self.assertEqual(
+            Evidence.objects.filter(case=self.case).count(),
+            21,
+        )
+
+        new_items = Evidence.objects.filter(
+            case=self.case,
+            evidence_id__in=[
+                f"E{i:02d}" for i in range(11, 31)
+            ],
+        )
+
+        self.assertEqual(new_items.filter(score__isnull=True).count(), 20)
+
+        self.assertTrue(all(
+            item.metadata.get("runtime_enabled") is False
+            for item in new_items
+        ))
+
+        self.assertTrue(all(
+            item.metadata.get("score_status") == "UNDEFINED"
+            for item in new_items
+        ))
+
+    def test_invalid_holder_rolls_back_all(self):
+        """마지막 증거의 NPC 참조가 잘못되면 전체 롤백합니다."""
+        self.write_source(invalid_holder=True)
+
+        with self.assertRaises(CommandError):
+            self.run_import(apply=True)
+
+        self.assertEqual(
+            Evidence.objects.filter(case=self.case).count(),
+            1,
+        )
+
+        self.assertFalse(
+            Evidence.objects.filter(
+                case=self.case,
+                evidence_id="E11",
+            ).exists()
+        )
+
+    def test_baseline_evidence_unchanged(self):
+        """E11~E30 Import가 기존 E01 정보를 변경하지 않습니다."""
+        self.write_source()
+        self.run_import(apply=True)
+
+        self.baseline.refresh_from_db()
+
+        self.assertEqual(self.baseline.name, "기존 증거")
+        self.assertEqual(self.baseline.score, 5)
+        self.assertEqual(
+            self.baseline.holder_id,
+            self.character.pk,
+        )
+
+
+class SceneImportCommandTests(TestCase):
+    """Scene Import의 롤백, 멱등성 및 공개 정책을 검증합니다."""
+
+    CHAPTER_COUNTS = {
+        "CH00": 5,
+        "CH01": 5,
+        "CH02": 6,
+        "CH03": 9,
+        "CH04": 5,
+    }
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.case = Case.objects.create(
+            case_id="CASE-001",
+            title="Scene Import 테스트 사건",
+        )
+
+        for number in range(5):
+            Chapter.objects.create(
+                case=cls.case,
+                code=f"CH{number:02d}",
+                order=number,
+                title=f"챕터 {number}",
+            )
+
+    def setUp(self):
+        self.temp_dir = TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+
+        self.source_path = (
+            Path(self.temp_dir.name) / "scenes.json"
+        )
+
+    def write_source(self, *, invalid_visibility=False):
+        """원본 스키마와 동일한 장면 30건을 생성합니다."""
+        scenes = []
+
+        for chapter, count in self.CHAPTER_COUNTS.items():
+            chapter_number = int(chapter[2:])
+
+            for number in range(1, count + 1):
+                scene_id = (
+                    f"SC-{chapter_number:02d}{number:02d}"
+                )
+
+                visibility = (
+                    "ENGINE_ONLY_UNTIL_UNLOCK"
+                    if chapter == "CH03" and number <= 2
+                    else "UNLOCKED_ONLY"
+                )
+
+                scenes.append({
+                    "scene_id": scene_id,
+                    "chapter": chapter,
+                    "title": f"테스트 장면 {scene_id}",
+                    "scene_text": f"{scene_id}의 테스트 원고",
+                    "visibility": visibility,
+                    "status": "CONTENT_FINAL_ENGINE_PENDING",
+                    "event_id_proposal": None,
+                    "puzzle": {},
+                })
+
+        if invalid_visibility:
+            scenes[0]["visibility"] = "PLAYER_VISIBLE"
+
+        payload = {
+            "schema_version": "case001-scenes-2026-11-20",
+            "not_backend_contract": True,
+            "scenes": scenes,
+        }
+
+        self.source_path.write_text(
+            json.dumps(payload, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    def run_import(self, *, apply=False):
+        output = StringIO()
+
+        call_command(
+            "import_case001_scenes",
+            source=self.source_path,
+            apply=apply,
+            stdout=output,
+        )
+
+        return output.getvalue()
+
+    def test_dry_run_rolls_back(self):
+        """Dry Run은 Scene을 저장하지 않아야 합니다."""
+        self.write_source()
+
+        output = self.run_import()
+
+        self.assertIn("New scenes: 30", output)
+        self.assertIn("DRY RUN", output)
+        self.assertEqual(Scene.objects.count(), 0)
+
+    def test_apply_is_idempotent_and_safe(self):
+        """중복 생성 없이 공개 제한을 유지합니다."""
+        self.write_source()
+
+        first = self.run_import(apply=True)
+        second = self.run_import(apply=True)
+
+        self.assertIn("New scenes: 30", first)
+        self.assertIn("New scenes: 0", second)
+        self.assertIn("Existing scenes: 30", second)
+
+        scenes = Scene.objects.filter(case=self.case)
+
+        self.assertEqual(scenes.count(), 30)
+
+        self.assertEqual(
+            scenes.filter(
+                visibility=Scene.Visibility.UNLOCKED_ONLY
+            ).count(),
+            28,
+        )
+
+        self.assertEqual(
+            scenes.filter(
+                visibility=Scene.Visibility.ENGINE_ONLY
+            ).count(),
+            2,
+        )
+
+        for scene in scenes:
+            self.assertIs(
+                scene.metadata["runtime_enabled"],
+                False,
+            )
+            self.assertIs(
+                scene.metadata["backend_contract_approved"],
+                False,
+            )
+
+            if scene.visibility == Scene.Visibility.ENGINE_ONLY:
+                self.assertEqual(
+                    scene.metadata["source_visibility"],
+                    "ENGINE_ONLY_UNTIL_UNLOCK",
+                )
+
+    def test_existing_conflict_rolls_back_all(self):
+        """마지막 장면에서 충돌하면 앞선 생성도 롤백합니다."""
+        self.write_source()
+
+        chapter = Chapter.objects.get(
+            case=self.case,
+            code="CH04",
+        )
+
+        Scene.objects.create(
+            case=self.case,
+            chapter=chapter,
+            scene_id="SC-0405",
+            title="기존에 저장된 다른 장면",
+            scene_text="변경하면 안 되는 원고",
+        )
+
+        with self.assertRaises(CommandError):
+            self.run_import(apply=True)
+
+        # 앞선 29건도 롤백되고 기존 1건만 남아야 합니다.
+        self.assertEqual(Scene.objects.count(), 1)
+
+        existing = Scene.objects.get(scene_id="SC-0405")
+        self.assertEqual(
+            existing.title,
+            "기존에 저장된 다른 장면",
+        )
+
+        self.assertFalse(
+            Scene.objects.filter(
+                scene_id="SC-0001"
+            ).exists()
+        )
+
+    def test_unknown_visibility_rejected(self):
+        """허용되지 않은 공개 범위를 거부합니다."""
+        self.write_source(invalid_visibility=True)
+
+        with self.assertRaises(CommandError):
+            self.run_import(apply=True)
+
+        self.assertEqual(Scene.objects.count(), 0)
+
+
+class NPCCardImportCommandTests(TestCase):
+    """NPC 카드 Import의 멱등성, 롤백, 참조 검증."""
+
+    KNOWLEDGE_COUNTS = {
+        "C01": 17, "C02": 13, "C03": 9,
+        "C04": 9, "C05": 7, "C06": 7,
+        "C07": 8, "C08": 9, "C09": 11,
+        "C10": 10,
+    }
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.case = Case.objects.create(
+            case_id="CASE-001",
+            title="NPC 카드 Import 테스트",
+        )
+
+        for number in range(1, 11):
+            Character.objects.create(
+                case=cls.case,
+                character_id=f"C{number:02d}",
+                name=f"NPC {number}",
+            )
+
+    def setUp(self):
+        self.temp_dir = TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        self.source_dir = Path(self.temp_dir.name)
+
+    def write_sources(self, *, invalid_npc=False):
+        knowledge_columns = [
+            "npc_id", "card_id", "내용", "지식상태",
+            "인식시점", "본적있는증거", "조건전_태도",
+            "공개조건", "조건후_태도",
+            "잠겼을때_답변방향", "근거",
+        ]
+
+        smalltalk_columns = [
+            "npc_id", "card_id", "대화주제",
+            "알고있는사실", "답변범위", "답변제한",
+            "말투", "참고예시", "공개조건", "근거",
+        ]
+
+        knowledge_path = (
+            self.source_dir / "08_NPC_KNOWLEDGE_CARDS.csv"
+        )
+        smalltalk_path = (
+            self.source_dir / "08_NPC_SMALLTALK_CARDS.csv"
+        )
+
+        with knowledge_path.open(
+            "w", encoding="utf-8-sig", newline=""
+        ) as file:
+            writer = csv.DictWriter(
+                file, fieldnames=knowledge_columns
+            )
+            writer.writeheader()
+
+            for npc_id, count in self.KNOWLEDGE_COUNTS.items():
+                for number in range(1, count + 1):
+                    writer.writerow({
+                        "npc_id": npc_id,
+                        "card_id": f"K-{npc_id}-{number:02d}",
+                        "내용": f"{npc_id} 테스트 지식 {number}",
+                        "지식상태": "알고 있음",
+                        "인식시점": "현재",
+                        "본적있는증거": "",
+                        "조건전_태도": "공개 제한",
+                        "공개조건": "검증 전 비공개",
+                        "조건후_태도": "변경 가능",
+                        "잠겼을때_답변방향": "답변 보류",
+                        "근거": "테스트 Fixture",
+                    })
+
+        with smalltalk_path.open(
+            "w", encoding="utf-8-sig", newline=""
+        ) as file:
+            writer = csv.DictWriter(
+                file, fieldnames=smalltalk_columns
+            )
+            writer.writeheader()
+
+            for number in range(1, 11):
+                npc_id = f"C{number:02d}"
+
+                for index in range(1, 5):
+                    # 마지막 행에서 잘못된 NPC 참조를 주입합니다.
+                    source_npc = (
+                        "C99"
+                        if invalid_npc
+                        and npc_id == "C10"
+                        and index == 4
+                        else npc_id
+                    )
+
+                    writer.writerow({
+                        "npc_id": source_npc,
+                        "card_id": f"K-{source_npc}-S{index:02d}",
+                        "대화주제": f"주제 {index}",
+                        "알고있는사실": "일상 대화용 사실",
+                        "답변범위": "일반 대화",
+                        "답변제한": "비밀 공개 금지",
+                        "말투": "차분함",
+                        "참고예시": "일반적인 답변",
+                        "공개조건": "검증 전 비공개",
+                        "근거": "테스트 Fixture",
+                    })
+
+    def run_import(self, *, apply=False):
+        output = StringIO()
+
+        call_command(
+            "import_case001_npc_cards",
+            source_dir=self.source_dir,
+            apply=apply,
+            stdout=output,
+        )
+
+        return output.getvalue()
+
+    def test_dry_run_rolls_back(self):
+        """Dry Run은 카드 데이터를 저장하지 않습니다."""
+        self.write_sources()
+
+        result = self.run_import()
+
+        self.assertIn("DRY RUN", result)
+        self.assertEqual(NPCCard.objects.count(), 0)
+
+    def test_apply_is_idempotent(self):
+        """반복 Import 시 카드 140건을 유지합니다."""
+        self.write_sources()
+
+        first = self.run_import(apply=True)
+        second = self.run_import(apply=True)
+
+        self.assertIn("New cards: 140", first)
+        self.assertIn("New cards: 0", second)
+        self.assertIn("Existing cards: 140", second)
+
+        self.assertEqual(NPCCard.objects.count(), 140)
+        self.assertEqual(
+            NPCCard.objects.filter(card_type="KNOWLEDGE").count(),
+            100,
+        )
+        self.assertEqual(
+            NPCCard.objects.filter(card_type="SMALLTALK").count(),
+            40,
+        )
+
+    def test_invalid_npc_rolls_back(self):
+        """잘못된 NPC 참조로 인해 전체 Import가 롤백됩니다."""
+        self.write_sources(invalid_npc=True)
+
+        with self.assertRaises(CommandError):
+            self.run_import(apply=True)
+
+        self.assertEqual(NPCCard.objects.count(), 0)
+
+    def test_disclosure_not_automatically_enabled(self):
+        """공개 조건이 평가되기 전 카드를 자동 활성화하지 않습니다."""
+        self.write_sources()
+        self.run_import(apply=True)
+
+        for card in NPCCard.objects.all():
+            self.assertIsInstance(card.disclosure_policy, dict)
+            self.assertIsNot(
+                card.disclosure_policy.get("runtime_enabled"),
+                True,
+            )
+
+
+class NPCDialogueTriggerImportTests(TestCase):
+    """NPC 대화 트리거 Import의 안전성과 멱등성을 검증합니다."""
+
+    NPC_COUNTS = {
+        "C01": 25, "C02": 17, "C03": 14,
+        "C04": 13, "C05": 15, "C06": 14,
+        "C07": 13, "C08": 19, "C09": 14,
+        "C10": 22,
+    }
+
+    COLUMNS = [
+        "npc_id",
+        "stage",
+        "trigger_type",
+        "evidence_ids",
+        "response_text",
+        "tag",
+        "next_stage",
+        "repeat_variant",
+        "draft_status",
+        "source_basis",
+        "condition_key",
+        "output_order",
+        "output_mode",
+    ]
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.case = Case.objects.create(
+            case_id="CASE-001",
+            title="대화 트리거 Import 테스트",
+            status=Case.Status.DRAFT,
+        )
+
+        for number in range(1, 11):
+            Character.objects.create(
+                case=cls.case,
+                character_id=f"C{number:02d}",
+                name=f"NPC {number}",
+            )
+
+    def setUp(self):
+        self.temp_dir = TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+
+        self.source = (
+            Path(self.temp_dir.name) / "dialogue_triggers.csv"
+        )
+
+    def write_source(self, *, invalid_type=False):
+        """원본과 같은 건수 및 분포의 임시 CSV를 생성합니다."""
+
+        global_index = 0
+
+        with self.source.open(
+            "w", encoding="utf-8-sig", newline=""
+        ) as file:
+            writer = csv.DictWriter(
+                file,
+                fieldnames=self.COLUMNS,
+            )
+            writer.writeheader()
+
+            for npc_id, count in self.NPC_COUNTS.items():
+                for order in range(1, count + 1):
+                    global_index += 1
+
+                    if global_index <= 60:
+                        trigger_type = "question"
+                    elif global_index <= 100:
+                        trigger_type = "verbal_only"
+                    elif global_index <= 148:
+                        trigger_type = "evidence"
+                    else:
+                        trigger_type = "evidence_combo"
+
+                    if global_index <= 100:
+                        stage = 1
+                    elif global_index <= 149:
+                        stage = 2
+                    else:
+                        stage = 3
+
+                    if global_index <= 101:
+                        next_stage = "유지"
+                    elif global_index <= 149:
+                        next_stage = "2"
+                    else:
+                        next_stage = "3"
+
+                    if invalid_type and global_index == 166:
+                        trigger_type = "invalid_type"
+
+                    writer.writerow({
+                        "npc_id": npc_id,
+                        "stage": stage,
+                        "trigger_type": trigger_type,
+                        "evidence_ids": "",
+                        "response_text": (
+                            f"{npc_id} 테스트 대사 {order}"
+                        ),
+                        "tag": "test",
+                        "next_stage": next_stage,
+                        "repeat_variant": "",
+                        "draft_status": "초안",
+                        "source_basis": "test_fixture",
+                        "condition_key": "test_condition",
+                        "output_order": order,
+                        "output_mode": (
+                            "reference"
+                            if global_index <= 90
+                            else "fixed"
+                        ),
+                    })
+
+    def run_import(self, *, apply=False):
+        output = StringIO()
+
+        call_command(
+            "import_case001_dialogue_triggers",
+            source=self.source,
+            apply=apply,
+            stdout=output,
+        )
+
+        return output.getvalue()
+
+    def test_dry_run_rolls_back(self):
+        """Dry Run에서는 데이터를 저장하지 않습니다."""
+        self.write_source()
+
+        result = self.run_import()
+
+        self.assertIn("New triggers: 166", result)
+        self.assertIn("DRY RUN", result)
+        self.assertEqual(
+            NPCDialogueTrigger.objects.count(),
+            0,
+        )
+
+    def test_apply_is_idempotent_and_inactive(self):
+        """재실행 시 중복 생성 없이 비활성 상태를 유지합니다."""
+        self.write_source()
+
+        first = self.run_import(apply=True)
+        second = self.run_import(apply=True)
+
+        self.assertIn("New triggers: 166", first)
+        self.assertIn("New triggers: 0", second)
+        self.assertIn("Existing triggers: 166", second)
+
+        triggers = list(
+            NPCDialogueTrigger.objects.all()
+        )
+
+        self.assertEqual(len(triggers), 166)
+        self.assertEqual(
+            len({t.trigger_id for t in triggers}),
+            166,
+        )
+
+        for trigger in triggers:
+            self.assertFalse(trigger.is_active)
+            self.assertIs(
+                trigger.metadata["runtime_enabled"],
+                False,
+            )
+            self.assertIs(
+                trigger.metadata["condition_approved"],
+                False,
+            )
+
+    def test_existing_conflict_rolls_back_all(self):
+        """마지막 트리거 충돌 시 앞선 생성도 롤백합니다."""
+        character = Character.objects.get(
+            case=self.case,
+            character_id="C10",
+        )
+
+        NPCDialogueTrigger.objects.create(
+            character=character,
+            trigger_id="DT-C10-022",
+            stage=1,
+            trigger_type="question",
+            output_mode="fixed",
+            response_text="기존에 저장된 다른 대사",
+            condition_key="existing_condition",
+            output_order=1,
+            is_active=False,
+        )
+
+        self.write_source()
+
+        with self.assertRaises(CommandError):
+            self.run_import(apply=True)
+
+        self.assertEqual(
+            NPCDialogueTrigger.objects.count(),
+            1,
+        )
+
+        self.assertFalse(
+            NPCDialogueTrigger.objects.filter(
+                trigger_id="DT-C01-001"
+            ).exists()
+        )
+
+    def test_invalid_trigger_type_rejected(self):
+        """허용되지 않은 트리거 유형을 거부합니다."""
+        self.write_source(invalid_type=True)
+
+        with self.assertRaises(CommandError):
+            self.run_import(apply=True)
+
+        self.assertEqual(
+            NPCDialogueTrigger.objects.count(),
+            0,
+        )
+
+
+class EvidenceLinkImportTests(TestCase):
+    """증거 연결 Import의 무결성 및 안전성을 검증합니다."""
+
+    COLUMNS = [
+        "from_evidence",
+        "to_evidence",
+        "relationship",
+        "resulting_inference",
+        "unlock_event",
+        "needs_canon_approval",
+        "presentation_mode",
+        "note",
+    ]
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.case = Case.objects.create(
+            case_id="CASE-001",
+            title="EvidenceLink Import 테스트",
+            status=Case.Status.DRAFT,
+        )
+
+        Evidence.objects.bulk_create([
+            Evidence(
+                case=cls.case,
+                evidence_id=f"E{number:02d}",
+                name=f"테스트 증거 {number}",
+                score=0,
+            )
+            for number in range(1, 31)
+        ])
+
+    def setUp(self):
+        self.temp_dir = TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+
+        self.source = (
+            Path(self.temp_dir.name) / "evidence_links.csv"
+        )
+
+    def write_source(self, *, invalid_reference=False):
+        """23건의 증거 연결 CSV를 생성합니다."""
+
+        with self.source.open(
+            "w",
+            encoding="utf-8-sig",
+            newline="",
+        ) as file:
+            writer = csv.DictWriter(
+                file,
+                fieldnames=self.COLUMNS,
+            )
+            writer.writeheader()
+
+            for number in range(1, 24):
+                source_id = f"E{number:02d}"
+
+                target_id = (
+                    "E99"
+                    if invalid_reference and number == 23
+                    else f"E{number + 1:02d}"
+                )
+
+                writer.writerow({
+                    "from_evidence": source_id,
+                    "to_evidence": target_id,
+                    "relationship": "supports",
+                    "resulting_inference": f"INF-{number:02d}",
+                    "unlock_event": f"EVT-{number:02d}",
+                    "needs_canon_approval": "YES",
+                    "presentation_mode": "복수(2개)",
+                    "note": "",
+                })
+
+    def run_import(self, *, apply=False):
+        output = StringIO()
+
+        call_command(
+            "import_case001_evidence_links",
+            source=self.source,
+            apply=apply,
+            stdout=output,
+        )
+
+        return output.getvalue()
+
+    def test_dry_run_rolls_back(self):
+        """Dry Run에서는 DB에 관계가 저장되지 않습니다."""
+        self.write_source()
+
+        result = self.run_import()
+
+        self.assertIn("New links: 23", result)
+        self.assertIn("DRY RUN", result)
+        self.assertEqual(EvidenceLink.objects.count(), 0)
+
+    def test_apply_is_idempotent_and_inactive(self):
+        """중복 생성 없이 모든 관계를 비활성 상태로 유지합니다."""
+        self.write_source()
+
+        first = self.run_import(apply=True)
+        second = self.run_import(apply=True)
+
+        self.assertIn("New links: 23", first)
+        self.assertIn("New links: 0", second)
+        self.assertIn("Existing links: 23", second)
+
+        links = list(
+            EvidenceLink.objects.select_related(
+                "from_evidence",
+                "to_evidence",
+            )
+        )
+
+        self.assertEqual(len(links), 23)
+
+        for link in links:
+            self.assertEqual(
+                link.from_evidence.case_id,
+                self.case.pk,
+            )
+            self.assertEqual(
+                link.to_evidence.case_id,
+                self.case.pk,
+            )
+            self.assertTrue(link.needs_canon_approval)
+            self.assertFalse(link.is_active)
+            self.assertIs(
+                link.metadata["runtime_enabled"],
+                False,
+            )
+            self.assertIs(
+                link.metadata["canon_approved"],
+                False,
+            )
+
+    def test_existing_conflict_rolls_back_all(self):
+        """마지막 관계에서 충돌하면 앞선 생성도 롤백합니다."""
+        source = Evidence.objects.get(
+            case=self.case,
+            evidence_id="E23",
+        )
+        target = Evidence.objects.get(
+            case=self.case,
+            evidence_id="E24",
+        )
+
+        EvidenceLink.objects.create(
+            from_evidence=source,
+            to_evidence=target,
+            relationship="supports",
+            resulting_inference="DIFFERENT-INFERENCE",
+            needs_canon_approval=True,
+            is_active=False,
+        )
+
+        self.write_source()
+
+        with self.assertRaises(CommandError):
+            self.run_import(apply=True)
+
+        # 기존 관계 한 건만 남아 있어야 합니다.
+        self.assertEqual(EvidenceLink.objects.count(), 1)
+
+        existing = EvidenceLink.objects.get()
+        self.assertEqual(
+            existing.resulting_inference,
+            "DIFFERENT-INFERENCE",
+        )
+
+    def test_unknown_evidence_rejected(self):
+        """DB에 없는 증거를 참조하면 전체 Import를 거부합니다."""
+        self.write_source(invalid_reference=True)
+
+        with self.assertRaises(CommandError):
+            self.run_import(apply=True)
+
+        self.assertEqual(EvidenceLink.objects.count(), 0)
+
+class CharacterRelationshipImportTests(TestCase):
+    """인물 관계 Import의 멱등성과 안전성을 검증합니다."""
+
+    COLUMNS = [
+        "from_type",
+        "from_id",
+        "to_type",
+        "to_id",
+        "relationship",
+        "public_from_stage",
+        "source_basis",
+        "period",
+    ]
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.case = Case.objects.create(
+            case_id="CASE-001",
+            title="인물 관계 Import 테스트",
+            status=Case.Status.DRAFT,
+        )
+
+        for number in range(1, 11):
+            Character.objects.create(
+                case=cls.case,
+                character_id=f"C{number:02d}",
+                name=f"NPC {number}",
+            )
+
+        for number in range(1, 31):
+            Evidence.objects.create(
+                case=cls.case,
+                evidence_id=f"E{number:02d}",
+                name=f"증거 {number}",
+                score=0,
+            )
+
+    def setUp(self):
+        self.temp_dir = TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+
+        self.source = (
+            Path(self.temp_dir.name) / "relationships.csv"
+        )
+
+    def write_source(self, *, invalid_evidence=False):
+        """원본과 동일한 유형·단계 분포의 58건을 생성합니다."""
+
+        with self.source.open(
+            "w", encoding="utf-8-sig", newline=""
+        ) as file:
+            writer = csv.DictWriter(
+                file, fieldnames=self.COLUMNS
+            )
+            writer.writeheader()
+
+            for index in range(1, 59):
+                npc_number = (index - 1) % 10 + 1
+                source_id = f"C{npc_number:02d}"
+
+                if index <= 11:
+                    target_type = "npc"
+                    target_id = f"C{npc_number % 10 + 1:02d}"
+                elif index <= 45:
+                    target_type = "evidence"
+                    evidence_number = (index - 12) % 30 + 1
+                    target_id = f"E{evidence_number:02d}"
+                else:
+                    target_type = "person"
+                    target_id = f"P-{index % 2 + 1:02d}"
+
+                if invalid_evidence and index == 45:
+                    target_id = "E99"
+
+                if index <= 12:
+                    stage = "S1"
+                elif index <= 43:
+                    stage = "S2"
+                else:
+                    stage = "S3"
+
+                writer.writerow({
+                    "from_type": "npc",
+                    "from_id": source_id,
+                    "to_type": target_type,
+                    "to_id": target_id,
+                    "relationship": f"테스트 관계 {index:02d}",
+                    "public_from_stage": stage,
+                    "source_basis": "test_fixture",
+                    "period": "2026",
+                })
+
+    def run_import(self, *, apply=False):
+        output = StringIO()
+
+        call_command(
+            "import_case001_relationships",
+            source=self.source,
+            apply=apply,
+            stdout=output,
+        )
+
+        return output.getvalue()
+
+    def test_dry_run_rolls_back(self):
+        """Dry Run 시 실제 DB에 저장하지 않습니다."""
+        self.write_source()
+
+        output = self.run_import()
+
+        self.assertIn("New relationships: 58", output)
+        self.assertIn("DRY RUN", output)
+        self.assertEqual(
+            CharacterRelationship.objects.count(), 0
+        )
+
+    def test_apply_is_idempotent_and_inactive(self):
+        """반복 실행해도 58건을 유지하고 비활성화합니다."""
+        self.write_source()
+
+        first = self.run_import(apply=True)
+        second = self.run_import(apply=True)
+
+        self.assertIn("New relationships: 58", first)
+        self.assertIn("New relationships: 0", second)
+        self.assertIn("Existing relationships: 58", second)
+
+        relations = list(
+            CharacterRelationship.objects.all()
+        )
+
+        self.assertEqual(len(relations), 58)
+
+        from collections import Counter
+
+        self.assertEqual(
+            Counter(r.target_type for r in relations),
+            {"npc": 11, "evidence": 34, "person": 13},
+        )
+
+        self.assertEqual(
+            Counter(r.public_from_stage for r in relations),
+            {1: 12, 2: 31, 3: 15},
+        )
+
+        for relation in relations:
+            self.assertFalse(relation.is_active)
+            self.assertIs(
+                relation.metadata["runtime_enabled"], False
+            )
+            self.assertIs(
+                relation.metadata["canon_approved"], False
+            )
+
+    def test_existing_conflict_rolls_back_all(self):
+        """마지막 행에서 충돌하면 앞선 57건도 롤백합니다."""
+        self.write_source()
+
+        character = Character.objects.get(
+            case=self.case,
+            character_id="C08",
+        )
+
+        CharacterRelationship.objects.create(
+            source_character=character,
+            target_type="person",
+            target_id="P-01",
+            relationship="기존에 저장된 다른 관계",
+            public_from_stage=3,
+            is_active=False,
+            metadata={
+                "import_source": "case001_1120",
+                "import_dataset": "relationships",
+                "source_line": 59,
+            },
+        )
+
+        with self.assertRaises(CommandError):
+            self.run_import(apply=True)
+
+        self.assertEqual(
+            CharacterRelationship.objects.count(), 1
+        )
+
+        existing = CharacterRelationship.objects.get()
+        self.assertEqual(
+            existing.relationship,
+            "기존에 저장된 다른 관계",
+        )
+
+    def test_unknown_evidence_rejected(self):
+        """존재하지 않는 증거 참조를 차단합니다."""
+        self.write_source(invalid_evidence=True)
+
+        with self.assertRaises(CommandError):
+            self.run_import(apply=True)
+
+        self.assertEqual(
+            CharacterRelationship.objects.count(), 0
+        )
+
+
+class ObjectiveImportTests(TestCase):
+    """Objective Import의 데이터 무결성과 안전 정책을 검증합니다."""
+
+    COLUMNS = [
+        "objective_id",
+        "unlocked_by_evidence",
+        "target_evidence",
+        "chapter",
+        "player_goal",
+        "trigger_source",
+        "hint_1",
+        "hint_2",
+        "hint_3",
+        "wrong_feedback",
+        "completion",
+        "status",
+    ]
+
+    CHAPTER_COUNTS = {
+        "CH00": 2,
+        "CH01": 5,
+        "CH02": 8,
+        "CH03": 7,
+        "CH04": 3,
+    }
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.case = Case.objects.create(
+            case_id="CASE-001",
+            title="Objective Import 테스트",
+            status=Case.Status.DRAFT,
+        )
+
+        for number in range(5):
+            Chapter.objects.create(
+                case=cls.case,
+                code=f"CH{number:02d}",
+                order=number,
+                title=f"챕터 {number}",
+            )
+
+        for number in range(1, 31):
+            Evidence.objects.create(
+                case=cls.case,
+                evidence_id=f"E{number:02d}",
+                name=f"테스트 증거 {number}",
+                score=0,
+            )
+
+    def setUp(self):
+        self.temp_dir = TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+
+        self.source = (
+            Path(self.temp_dir.name) / "objectives.csv"
+        )
+
+    def write_source(self, *, invalid_evidence=False):
+        """챕터 분포와 특수 목표가 포함된 25건의 CSV를 생성합니다."""
+
+        index = 0
+
+        with self.source.open(
+            "w",
+            encoding="utf-8-sig",
+            newline="",
+        ) as file:
+            writer = csv.DictWriter(
+                file,
+                fieldnames=self.COLUMNS,
+            )
+            writer.writeheader()
+
+            for chapter, count in self.CHAPTER_COUNTS.items():
+                for _ in range(count):
+                    index += 1
+
+                    objective_id = f"OBJ_{index:03d}"
+                    target = f"E{index:02d}"
+                    unlock = (
+                        ""
+                        if index <= 3
+                        else f"E{index - 1:02d}"
+                    )
+
+                    if index == 24:
+                        objective_id = "OBJ_FINAL_RECONSTRUCTION"
+                        target = "FINAL"
+                        unlock = "E29"
+
+                    elif index == 25:
+                        objective_id = "OBJ_COMPLETE_OLD_CASE"
+                        target = "DEEP"
+                        unlock = "E30"
+
+                    if invalid_evidence and index == 23:
+                        target = "E99"
+
+                    writer.writerow({
+                        "objective_id": objective_id,
+                        "unlocked_by_evidence": unlock,
+                        "target_evidence": target,
+                        "chapter": chapter,
+                        "player_goal": f"플레이어 목표 {index}",
+                        "trigger_source": "test_fixture",
+                        "hint_1": f"첫 번째 힌트 {index}",
+                        "hint_2": f"두 번째 힌트 {index}",
+                        "hint_3": f"세 번째 힌트 {index}",
+                        "wrong_feedback": "다시 조사해 보세요.",
+                        "completion": "미승인 완료 조건",
+                        "status": "초안",
+                    })
+
+    def run_import(self, *, apply=False):
+        output = StringIO()
+
+        call_command(
+            "import_case001_objectives",
+            source=self.source,
+            apply=apply,
+            stdout=output,
+        )
+
+        return output.getvalue()
+
+    def test_dry_run_rolls_back(self):
+        """Dry Run 시 실제 DB에 저장하지 않습니다."""
+        self.write_source()
+
+        result = self.run_import()
+
+        self.assertIn("New objectives: 25", result)
+        self.assertIn("DRY RUN", result)
+        self.assertEqual(Objective.objects.count(), 0)
+
+    def test_apply_is_idempotent_and_inactive(self):
+        """반복 Import 후에도 25건과 비활성 정책을 유지합니다."""
+        self.write_source()
+
+        first = self.run_import(apply=True)
+        second = self.run_import(apply=True)
+
+        self.assertIn("New objectives: 25", first)
+        self.assertIn("New objectives: 0", second)
+        self.assertIn("Existing objectives: 25", second)
+
+        objectives = list(
+            Objective.objects.select_related("chapter")
+        )
+
+        self.assertEqual(len(objectives), 25)
+
+        from collections import Counter
+
+        self.assertEqual(
+            Counter(obj.chapter.code for obj in objectives),
+            self.CHAPTER_COUNTS,
+        )
+
+        for obj in objectives:
+            self.assertEqual(len(obj.hints), 3)
+            self.assertEqual(obj.completion_rule, {})
+            self.assertFalse(obj.is_active)
+            self.assertIs(
+                obj.metadata["runtime_enabled"],
+                False,
+            )
+            self.assertIs(
+                obj.metadata["completion_rule_approved"],
+                False,
+            )
+
+        special = {
+            obj.objective_id: obj.metadata["source_target_evidence"]
+            for obj in objectives
+            if obj.metadata["source_target_type"] == "symbolic"
+        }
+
+        self.assertEqual(
+            special,
+            {
+                "OBJ_FINAL_RECONSTRUCTION": "FINAL",
+                "OBJ_COMPLETE_OLD_CASE": "DEEP",
+            },
+        )
+
+    def test_existing_conflict_rolls_back_all(self):
+        """마지막 Objective 충돌 시 이전 생성 내역도 롤백합니다."""
+        self.write_source()
+
+        chapter = Chapter.objects.get(
+            case=self.case,
+            code="CH04",
+        )
+
+        Objective.objects.create(
+            chapter=chapter,
+            objective_id="OBJ_COMPLETE_OLD_CASE",
+            player_goal="기존에 저장된 다른 목표",
+            hints=["기존 힌트"],
+            completion_rule={},
+            is_active=False,
+        )
+
+        with self.assertRaises(CommandError):
+            self.run_import(apply=True)
+
+        # 신규 생성 예정이던 24건도 롤백되어야 합니다.
+        self.assertEqual(Objective.objects.count(), 1)
+
+        existing = Objective.objects.get()
+        self.assertEqual(
+            existing.player_goal,
+            "기존에 저장된 다른 목표",
+        )
+
+        self.assertFalse(
+            Objective.objects.filter(
+                objective_id="OBJ_001"
+            ).exists()
+        )
+
+    def test_unknown_evidence_rejected(self):
+        """존재하지 않는 증거 참조를 차단합니다."""
+        self.write_source(invalid_evidence=True)
+
+        with self.assertRaises(CommandError):
+            self.run_import(apply=True)
+
+        self.assertEqual(Objective.objects.count(), 0)

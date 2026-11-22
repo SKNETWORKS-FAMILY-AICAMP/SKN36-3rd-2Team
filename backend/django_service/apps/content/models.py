@@ -1028,7 +1028,9 @@ class Evidence(models.Model):
     )
 
     score = models.PositiveIntegerField(
-        default=0,
+        null = True,
+        blank = True,
+        default = None,
         verbose_name="증거 점수",
     )
 

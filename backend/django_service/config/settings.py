@@ -150,3 +150,15 @@ REST_FRAMEWORK = {
         "rest_framework.permissions.IsAuthenticated",
     ],
 }
+
+
+# FastAPI ↔ Django 서버 간 인증 토큰
+# 미설정 상태에서는 서버 전용 API 접근을 거부합니다.
+CONTENT_SERVICE_TOKEN = os.getenv(
+    "DJANGO_CONTENT_SERVICE_TOKEN", ""
+).strip()
+
+if CONTENT_SERVICE_TOKEN and len(CONTENT_SERVICE_TOKEN) < 32:
+    raise RuntimeError(
+        "DJANGO_CONTENT_SERVICE_TOKEN must be at least 32 characters."
+    )

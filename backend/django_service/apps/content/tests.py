@@ -35,6 +35,8 @@ from django.core.management import call_command
 import csv
 
 from django.core.management.base import CommandError
+from apps.content.models import EvidencePrerequisite
+
 class ContentModelTests(TestCase):
     """Case, Chapter, Character 모델의 무결성을 검증합니다."""
 
@@ -2874,3 +2876,1112 @@ class ObjectiveImportTests(TestCase):
             self.run_import(apply=True)
 
         self.assertEqual(Objective.objects.count(), 0)
+
+
+from django.contrib.auth import get_user_model
+from django.urls import reverse
+from rest_framework.test import APITestCase
+
+
+class CaseOverviewAPITests(APITestCase):
+    """관리자 전용 콘텐츠 개요 API의 접근 권한을 검증합니다."""
+
+    @classmethod
+    def setUpTestData(cls):
+        user_model = get_user_model()
+
+        cls.admin_user = user_model.objects.create_user(
+            username="content_admin",
+            password="TestPassword123!",
+            is_staff=True,
+        )
+
+        cls.normal_user = user_model.objects.create_user(
+            username="content_user",
+            password="TestPassword123!",
+            is_staff=False,
+        )
+
+        cls.case = Case.objects.create(
+            case_id="CASE-001",
+            title="API 테스트 사건",
+            description="PRIVATE_CASE_DESCRIPTION",
+            status=Case.Status.DRAFT,
+        )
+
+        Chapter.objects.create(
+            case=cls.case,
+            code="CH01",
+            order=1,
+            title="첫 번째 챕터",
+            summary="PRIVATE_CHAPTER_SUMMARY",
+            metadata={"secret": "PRIVATE_METADATA"},
+        )
+
+        Chapter.objects.create(
+            case=cls.case,
+            code="CH00",
+            order=0,
+            title="프롤로그",
+        )
+
+        cls.url = reverse(
+            "case-overview",
+            kwargs={"case_id": "CASE-001"},
+        )
+
+    def test_admin_can_read_overview(self):
+        """관리자는 사건과 챕터 기본 정보를 조회할 수 있습니다."""
+        self.client.force_login(self.admin_user)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.data["case"]["case_id"],
+            "CASE-001",
+        )
+        self.assertEqual(
+            len(response.data["chapters"]),
+            2,
+        )
+        self.assertEqual(
+            [chapter["code"] for chapter in response.data["chapters"]],
+            ["CH00", "CH01"],
+        )
+
+        # Serializer에서 허용한 필드만 응답해야 합니다.
+        self.assertEqual(
+            set(response.data["case"]),
+            {"case_id", "title", "status"},
+        )
+
+        for chapter in response.data["chapters"]:
+            self.assertEqual(
+                set(chapter),
+                {"code", "order", "title"},
+            )
+
+        serialized = response.content.decode("utf-8")
+
+        for secret in (
+            "PRIVATE_CASE_DESCRIPTION",
+            "PRIVATE_CHAPTER_SUMMARY",
+            "PRIVATE_METADATA",
+        ):
+            self.assertNotIn(secret, serialized)
+
+    def test_normal_user_is_forbidden(self):
+        """일반 인증 사용자는 조회할 수 없습니다."""
+        self.client.force_login(self.normal_user)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_anonymous_user_is_forbidden(self):
+        """비로그인 사용자는 조회할 수 없습니다."""
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_unknown_case_returns_404(self):
+        """존재하지 않는 사건은 404를 반환합니다."""
+        self.client.force_login(self.admin_user)
+
+        url = reverse(
+            "case-overview",
+            kwargs={"case_id": "CASE-999"},
+        )
+
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_post_is_not_allowed(self):
+        """조회 전용 API의 데이터 변경 요청을 차단합니다."""
+        self.client.force_login(self.admin_user)
+
+        response = self.client.post(
+            self.url,
+            {"title": "변경 시도"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 405)
+
+
+from django.contrib.auth import get_user_model
+from django.test import override_settings
+from django.urls import reverse
+from rest_framework.test import APITestCase
+
+
+@override_settings(
+    CONTENT_SERVICE_TOKEN="test-service-token-" + "A" * 48
+)
+class InternalCaseOverviewAPITests(APITestCase):
+    """FastAPI 전용 콘텐츠 API 인증 및 정보 노출 테스트."""
+
+    TEST_TOKEN = "test-service-token-" + "A" * 48
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.admin = get_user_model().objects.create_user(
+            username="internal_api_admin",
+            password="TestPassword123!",
+            is_staff=True,
+        )
+
+        cls.case = Case.objects.create(
+            case_id="CASE-001",
+            title="내부 API 테스트 사건",
+            description="SECRET_CASE_DESCRIPTION",
+            status=Case.Status.DRAFT,
+        )
+
+        Chapter.objects.create(
+            case=cls.case,
+            code="CH00",
+            order=0,
+            title="프롤로그",
+            summary="SECRET_CHAPTER_SUMMARY",
+            metadata={
+                "engine_secret": "SECRET_METADATA_VALUE",
+            },
+        )
+
+        cls.url = reverse(
+            "internal-case-overview",
+            kwargs={"case_id": "CASE-001"},
+        )
+
+    def authenticated_get(self, url=None):
+        """테스트용 서비스 토큰으로 GET 요청합니다."""
+        return self.client.get(
+            url or self.url,
+            HTTP_X_CONTENT_SERVICE_TOKEN=self.TEST_TOKEN,
+        )
+
+    def test_valid_token_returns_200(self):
+        """정상 서비스 토큰으로 조회할 수 있습니다."""
+        response = self.authenticated_get()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.data["case"]["case_id"],
+            "CASE-001",
+        )
+        self.assertEqual(len(response.data["chapters"]), 1)
+
+    def test_missing_token_returns_403(self):
+        """토큰 없는 요청은 거부합니다."""
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_invalid_token_returns_403(self):
+        """잘못된 서비스 토큰은 거부합니다."""
+        response = self.client.get(
+            self.url,
+            HTTP_X_CONTENT_SERVICE_TOKEN="invalid-token",
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_admin_session_cannot_bypass_token(self):
+        """관리자 세션만으로 내부 API에 접근할 수 없습니다."""
+        self.client.force_login(self.admin)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+    @override_settings(CONTENT_SERVICE_TOKEN="")
+    def test_unconfigured_token_fails_closed(self):
+        """서버 토큰이 미설정이면 모든 요청을 거부합니다."""
+        response = self.authenticated_get()
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_unknown_case_returns_404(self):
+        """인증 성공 후 존재하지 않는 사건은 404입니다."""
+        url = reverse(
+            "internal-case-overview",
+            kwargs={"case_id": "CASE-999"},
+        )
+
+        response = self.authenticated_get(url)
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_post_returns_405(self):
+        """서버 토큰이 유효해도 데이터 변경은 허용하지 않습니다."""
+        response = self.client.post(
+            self.url,
+            {"title": "무단 수정"},
+            format="json",
+            HTTP_X_CONTENT_SERVICE_TOKEN=self.TEST_TOKEN,
+        )
+
+        self.assertEqual(response.status_code, 405)
+
+    def test_private_fields_are_not_exposed(self):
+        """내부 API에도 미승인 상세 데이터는 반환하지 않습니다."""
+        response = self.authenticated_get()
+
+        self.assertEqual(response.status_code, 200)
+
+        self.assertEqual(
+            set(response.data["case"]),
+            {"case_id", "title", "status"},
+        )
+
+        self.assertEqual(
+            set(response.data["chapters"][0]),
+            {"code", "order", "title"},
+        )
+
+        response_body = response.content.decode("utf-8")
+
+        for secret in (
+            "SECRET_CASE_DESCRIPTION",
+            "SECRET_CHAPTER_SUMMARY",
+            "SECRET_METADATA_VALUE",
+        ):
+            self.assertNotIn(secret, response_body)
+
+
+from django.test import SimpleTestCase
+
+from apps.content.access_policy import is_runtime_approved
+from apps.content.models import (
+    Case,
+    Chapter,
+    Character,
+    Evidence,
+    NPCCard,
+    Objective,
+    Scene,
+)
+
+
+class ContentAccessPolicyTests(SimpleTestCase):
+    """콘텐츠 런타임 승인 정책의 Fail-Closed 동작을 검증합니다."""
+
+    def setUp(self):
+        # 정책은 DB 조회 없이 객체의 승인 상태만 검사합니다.
+        self.case = Case(
+            case_id="CASE-001",
+            title="접근 정책 테스트",
+        )
+
+        self.chapter = Chapter(
+            case=self.case,
+            code="CH01",
+            order=1,
+            title="테스트 챕터",
+        )
+
+        self.character = Character(
+            case=self.case,
+            character_id="C01",
+            name="테스트 NPC",
+        )
+
+        self.scene = Scene(
+            case=self.case,
+            chapter=self.chapter,
+            scene_id="SC-0101",
+            title="테스트 장면",
+            scene_text="비공개 장면 원문",
+            visibility=Scene.Visibility.UNLOCKED_ONLY,
+            metadata={},
+        )
+
+        self.evidence = Evidence(
+            case=self.case,
+            evidence_id="E01",
+            name="테스트 증거",
+            metadata={},
+        )
+
+        self.card = NPCCard(
+            character=self.character,
+            card_id="K-C01-01",
+            card_type=NPCCard.CardType.KNOWLEDGE,
+            content="NPC 비공개 지식",
+            disclosure_policy={},
+            metadata={},
+        )
+
+        self.objective = Objective(
+            chapter=self.chapter,
+            objective_id="OBJ_001",
+            player_goal="증거를 조사하세요.",
+            hints=["힌트 1", "힌트 2", "힌트 3"],
+            completion_rule={},
+            is_active=False,
+            metadata={},
+        )
+
+        self.contents = [
+            self.scene,
+            self.evidence,
+            self.card,
+            self.objective,
+        ]
+
+    def test_all_content_denied_by_default(self):
+        """명시적 승인이 없으면 모든 콘텐츠를 거부합니다."""
+        for content in self.contents:
+            with self.subTest(type=type(content).__name__):
+                self.assertFalse(is_runtime_approved(content))
+
+    def test_invalid_metadata_fails_closed(self):
+        """비정상 메타데이터는 예외 없이 접근을 거부합니다."""
+        for content in self.contents:
+            with self.subTest(type=type(content).__name__):
+                content.metadata = None
+                self.assertFalse(is_runtime_approved(content))
+
+                content.metadata = []
+                self.assertFalse(is_runtime_approved(content))
+
+    def test_scene_requires_backend_approval(self):
+        """Scene은 런타임 및 Backend 계약 승인이 모두 필요합니다."""
+        self.scene.metadata = {
+            "runtime_enabled": True,
+            "backend_contract_approved": False,
+        }
+
+        self.assertFalse(is_runtime_approved(self.scene))
+
+        self.scene.metadata["backend_contract_approved"] = True
+
+        self.assertTrue(is_runtime_approved(self.scene))
+
+        # 지원하지 않는 공개 범위는 승인이 있어도 거부합니다.
+        self.scene.visibility = "UNKNOWN_VISIBILITY"
+
+        self.assertFalse(is_runtime_approved(self.scene))
+
+    def test_evidence_requires_all_approvals(self):
+        """증거는 정본과 공개 승인이 모두 있어야 사용 가능합니다."""
+        self.evidence.metadata = {
+            "runtime_enabled": True,
+            "canon_approved": False,
+            "publication_approved": True,
+        }
+
+        self.assertFalse(is_runtime_approved(self.evidence))
+
+        self.evidence.metadata["canon_approved"] = True
+        self.evidence.metadata["publication_approved"] = False
+
+        self.assertFalse(is_runtime_approved(self.evidence))
+
+        self.evidence.metadata["publication_approved"] = True
+
+        self.assertTrue(is_runtime_approved(self.evidence))
+
+    def test_npc_card_requires_approved_policy(self):
+        """NPC 카드는 승인된 공개 정책이 필수입니다."""
+        self.card.metadata = {
+            "runtime_enabled": True,
+        }
+
+        self.card.disclosure_policy = {
+            "status": "UNRESOLVED",
+            "allow": True,
+        }
+
+        self.assertFalse(is_runtime_approved(self.card))
+
+        self.card.disclosure_policy["status"] = "APPROVED"
+        self.card.disclosure_policy["allow"] = False
+
+        self.assertFalse(is_runtime_approved(self.card))
+
+        self.card.disclosure_policy["allow"] = True
+
+        self.assertTrue(is_runtime_approved(self.card))
+
+    def test_objective_requires_completion_rule(self):
+        """Objective는 완료 규칙과 활성화 및 승인이 모두 필요합니다."""
+        self.objective.metadata = {
+            "runtime_enabled": True,
+            "completion_rule_approved": True,
+        }
+
+        self.objective.is_active = True
+
+        # 완료 조건이 비어 있으면 승인되어도 거부합니다.
+        self.assertFalse(is_runtime_approved(self.objective))
+
+        self.objective.completion_rule = {
+            "type": "evidence_collected",
+            "evidence_id": "E01",
+        }
+
+        self.assertTrue(is_runtime_approved(self.objective))
+
+        self.objective.is_active = False
+
+        self.assertFalse(is_runtime_approved(self.objective))
+
+    def test_unknown_content_type_is_denied(self):
+        """지원하지 않는 객체 유형은 기본적으로 거부합니다."""
+        class UnknownContent:
+            metadata = {"runtime_enabled": True}
+
+        self.assertFalse(
+            is_runtime_approved(UnknownContent())
+        )
+
+@override_settings(
+    CONTENT_SERVICE_TOKEN="readiness-test-" + "A" * 48
+)
+class InternalContentReadinessAPITests(APITestCase):
+    """콘텐츠 승인 현황 API의 인증 및 정보 보호를 검증합니다."""
+
+    TEST_TOKEN = "readiness-test-" + "A" * 48
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.case = Case.objects.create(
+            case_id="CASE-001",
+            title="콘텐츠 승인 테스트",
+            status=Case.Status.DRAFT,
+        )
+
+        cls.chapter = Chapter.objects.create(
+            case=cls.case,
+            code="CH00",
+            order=0,
+            title="프롤로그",
+        )
+
+        cls.character = Character.objects.create(
+            case=cls.case,
+            character_id="C01",
+            name="테스트 NPC",
+        )
+
+        cls.scene = Scene.objects.create(
+            case=cls.case,
+            chapter=cls.chapter,
+            scene_id="SC-0001",
+            title="SECRET_SCENE_TITLE",
+            scene_text="SECRET_SCENE_TEXT",
+            visibility=Scene.Visibility.ENGINE_ONLY,
+            metadata={
+                "runtime_enabled": False,
+                "backend_contract_approved": False,
+            },
+        )
+
+        Evidence.objects.create(
+            case=cls.case,
+            evidence_id="E01",
+            name="SECRET_EVIDENCE_NAME",
+            metadata={
+                "runtime_enabled": False,
+                "canon_approved": False,
+            },
+        )
+
+        NPCCard.objects.create(
+            character=cls.character,
+            card_id="K-C01-01",
+            card_type=NPCCard.CardType.KNOWLEDGE,
+            content="SECRET_NPC_KNOWLEDGE",
+            disclosure_policy={
+                "status": "UNRESOLVED",
+                "allow": False,
+            },
+            metadata={"runtime_enabled": False},
+        )
+
+        Objective.objects.create(
+            chapter=cls.chapter,
+            objective_id="OBJ_001",
+            player_goal="SECRET_OBJECTIVE_GOAL",
+            hints=["힌트 1", "힌트 2", "힌트 3"],
+            completion_rule={},
+            is_active=False,
+            metadata={
+                "runtime_enabled": False,
+                "completion_rule_approved": False,
+            },
+        )
+
+        cls.admin = get_user_model().objects.create_user(
+            username="readiness_admin",
+            password="TestPassword123!",
+            is_staff=True,
+        )
+
+        cls.url = reverse(
+            "internal-content-readiness",
+            kwargs={"case_id": "CASE-001"},
+        )
+
+    def authenticated_get(self, url=None):
+        return self.client.get(
+            url or self.url,
+            HTTP_X_CONTENT_SERVICE_TOKEN=self.TEST_TOKEN,
+        )
+
+    def test_valid_token_returns_counts(self):
+        """정상 토큰이면 승인 및 차단 건수를 반환합니다."""
+        response = self.authenticated_get()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["case_id"], "CASE-001")
+
+        resources = response.data["resources"]
+
+        for resource in (
+            "scenes",
+            "evidence",
+            "npc_cards",
+            "objectives",
+        ):
+            with self.subTest(resource=resource):
+                self.assertEqual(
+                    resources[resource],
+                    {
+                        "total": 1,
+                        "approved": 0,
+                        "blocked": 1,
+                    },
+                )
+
+    def test_missing_token_returns_403(self):
+        """토큰이 없으면 접근을 거부합니다."""
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_invalid_token_returns_403(self):
+        """잘못된 토큰은 접근을 거부합니다."""
+        response = self.client.get(
+            self.url,
+            HTTP_X_CONTENT_SERVICE_TOKEN="invalid-token",
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_admin_session_cannot_bypass_token(self):
+        """관리자 세션만으로 내부 API에 접근할 수 없습니다."""
+        self.client.force_login(self.admin)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+    @override_settings(CONTENT_SERVICE_TOKEN="")
+    def test_missing_configuration_fails_closed(self):
+        """서버 토큰 설정이 없으면 요청을 거부합니다."""
+        response = self.authenticated_get()
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_unknown_case_returns_404(self):
+        """존재하지 않는 사건은 404를 반환합니다."""
+        url = reverse(
+            "internal-content-readiness",
+            kwargs={"case_id": "CASE-999"},
+        )
+
+        response = self.authenticated_get(url)
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_post_returns_405(self):
+        """조회 API의 데이터 변경 요청을 차단합니다."""
+        response = self.client.post(
+            self.url,
+            {"approved": True},
+            format="json",
+            HTTP_X_CONTENT_SERVICE_TOKEN=self.TEST_TOKEN,
+        )
+
+        self.assertEqual(response.status_code, 405)
+
+    def test_private_content_is_not_exposed(self):
+        """원본 대사, 증거, 목표 정보는 반환하지 않습니다."""
+        response = self.authenticated_get()
+
+        self.assertEqual(response.status_code, 200)
+
+        body = response.content.decode("utf-8")
+
+        for secret in (
+            "SECRET_SCENE_TITLE",
+            "SECRET_SCENE_TEXT",
+            "SECRET_EVIDENCE_NAME",
+            "SECRET_NPC_KNOWLEDGE",
+            "SECRET_OBJECTIVE_GOAL",
+        ):
+            self.assertNotIn(secret, body)
+
+        self.assertEqual(
+            set(response.data),
+            {"case_id", "resources"},
+        )
+
+    def test_approved_scene_updates_readiness(self):
+        """서버의 승인 정책 변경이 집계에 반영됩니다."""
+        self.scene.metadata = {
+            "runtime_enabled": True,
+            "backend_contract_approved": True,
+        }
+        self.scene.save()
+
+        response = self.authenticated_get()
+
+        self.assertEqual(response.status_code, 200)
+
+        self.assertEqual(
+            response.data["resources"]["scenes"],
+            {
+                "total": 1,
+                "approved": 1,
+                "blocked": 0,
+            },
+        )
+
+        # 런타임 승인 이후에도 장면 원문은 반환하지 않습니다.
+        self.assertNotIn(
+            "SECRET_SCENE_TEXT",
+            response.content.decode("utf-8"),
+        )
+
+
+@override_settings(
+    CONTENT_SERVICE_TOKEN="scene-test-token-" + "A" * 48
+)
+class InternalPlayerSceneAPITests(APITestCase):
+    """Scene 공개 정책과 서버 간 인증을 검증합니다."""
+
+    TEST_TOKEN = "scene-test-token-" + "A" * 48
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.case = Case.objects.create(
+            case_id="CASE-001",
+            title="Scene API 테스트 사건",
+            status=Case.Status.DRAFT,
+        )
+
+        cls.chapter = Chapter.objects.create(
+            case=cls.case,
+            code="CH00",
+            order=0,
+            title="프롤로그",
+        )
+
+        cls.scene = Scene.objects.create(
+            case=cls.case,
+            chapter=cls.chapter,
+            scene_id="SC-0001",
+            title="SECRET_SCENE_TITLE",
+            scene_text="SECRET_SCENE_TEXT",
+            visibility=Scene.Visibility.ENGINE_ONLY,
+            metadata={
+                "runtime_enabled": False,
+                "backend_contract_approved": False,
+                "source_details": {
+                    "internal_note": "SECRET_ENGINE_METADATA",
+                },
+            },
+        )
+
+        cls.admin = get_user_model().objects.create_user(
+            username="scene_api_admin",
+            password="TestPassword123!",
+            is_staff=True,
+        )
+
+        cls.url = reverse(
+            "internal-player-scene",
+            kwargs={
+                "case_id": "CASE-001",
+                "scene_id": "SC-0001",
+            },
+        )
+
+    def authenticated_get(self, url=None):
+        """테스트 전용 서비스 토큰으로 조회합니다."""
+        return self.client.get(
+            url or self.url,
+            HTTP_X_CONTENT_SERVICE_TOKEN=self.TEST_TOKEN,
+        )
+
+    def approve_scene(
+        self,
+        *,
+        visibility=Scene.Visibility.PLAYER_VISIBLE,
+        published=True,
+        runtime_enabled=True,
+        backend_approved=True,
+    ):
+        """테스트에서만 승인 조건을 설정합니다."""
+        if published:
+            self.case.status = Case.Status.PUBLISHED
+            self.case.save()
+
+        self.scene.visibility = visibility
+        self.scene.metadata = {
+            "runtime_enabled": runtime_enabled,
+            "backend_contract_approved": backend_approved,
+            "source_details": {
+                "internal_note": "SECRET_ENGINE_METADATA",
+            },
+        }
+        self.scene.save()
+
+    def test_draft_case_is_denied(self):
+        """게시되지 않은 사건은 승인된 Scene도 반환하지 않습니다."""
+        self.approve_scene(published=False)
+
+        response = self.authenticated_get()
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_runtime_disabled_scene_is_denied(self):
+        """런타임 비활성 Scene은 반환하지 않습니다."""
+        self.approve_scene(runtime_enabled=False)
+
+        response = self.authenticated_get()
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_backend_unapproved_scene_is_denied(self):
+        """Backend 계약 미승인 Scene은 차단합니다."""
+        self.approve_scene(backend_approved=False)
+
+        response = self.authenticated_get()
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_engine_only_scene_is_denied(self):
+        """ENGINE_ONLY는 모든 런타임 승인이 있어도 차단합니다."""
+        self.approve_scene(
+            visibility=Scene.Visibility.ENGINE_ONLY
+        )
+
+        response = self.authenticated_get()
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_npc_knowledge_scene_is_denied(self):
+        """NPC 전용 Scene은 플레이어 조회 API에서 차단합니다."""
+        self.approve_scene(
+            visibility=Scene.Visibility.NPC_KNOWLEDGE
+        )
+
+        response = self.authenticated_get()
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_unlocked_only_scene_is_denied(self):
+        """해금 검증 전에는 UNLOCKED_ONLY를 차단합니다."""
+        self.approve_scene(
+            visibility=Scene.Visibility.UNLOCKED_ONLY
+        )
+
+        response = self.authenticated_get()
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_approved_player_visible_scene_returns_200(self):
+        """모든 승인 조건을 충족한 기본 공개 Scene만 반환합니다."""
+        self.approve_scene()
+
+        response = self.authenticated_get()
+
+        self.assertEqual(response.status_code, 200)
+
+        self.assertEqual(
+            response.data,
+            {
+                "scene_id": "SC-0001",
+                "chapter": "CH00",
+                "title": "SECRET_SCENE_TITLE",
+                "scene_text": "SECRET_SCENE_TEXT",
+            },
+        )
+
+        # 엔진 내부 메타데이터는 승인 후에도 노출하지 않습니다.
+        body = response.content.decode("utf-8")
+
+        self.assertNotIn("SECRET_ENGINE_METADATA", body)
+        self.assertNotIn("source_details", body)
+        self.assertNotIn("runtime_enabled", body)
+
+    def test_missing_token_is_denied(self):
+        """서비스 토큰이 없는 요청은 403을 반환합니다."""
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 403)
+        self.assertNotIn(
+            "SECRET_SCENE_TEXT",
+            response.content.decode("utf-8"),
+        )
+
+    def test_invalid_token_is_denied(self):
+        """잘못된 토큰은 접근할 수 없습니다."""
+        response = self.client.get(
+            self.url,
+            HTTP_X_CONTENT_SERVICE_TOKEN="invalid-token",
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_admin_session_cannot_bypass_token(self):
+        """관리자 로그인으로 서버 간 인증을 우회할 수 없습니다."""
+        self.client.force_login(self.admin)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_unknown_scene_returns_404(self):
+        """존재하지 않는 Scene은 404를 반환합니다."""
+        self.approve_scene()
+
+        url = reverse(
+            "internal-player-scene",
+            kwargs={
+                "case_id": "CASE-001",
+                "scene_id": "SC-9999",
+            },
+        )
+
+        response = self.authenticated_get(url)
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_post_is_not_allowed(self):
+        """조회 API에 대한 POST 요청은 차단합니다."""
+        response = self.client.post(
+            self.url,
+            {"scene_text": "무단 수정"},
+            format="json",
+            HTTP_X_CONTENT_SERVICE_TOKEN=self.TEST_TOKEN,
+        )
+
+        self.assertEqual(response.status_code, 405)
+
+
+@override_settings(
+    CONTENT_SERVICE_TOKEN="evidence-test-" + "A" * 48
+)
+class InternalEvidenceRequirementsAPITests(APITestCase):
+    """증거 선행 조건 API의 인증과 정보 보호를 검증합니다."""
+
+    TEST_TOKEN = "evidence-test-" + "A" * 48
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.case = Case.objects.create(
+            case_id="CASE-001",
+            title="Evidence API 테스트",
+            status=Case.Status.PUBLISHED,
+        )
+
+        cls.approved_metadata = {
+            "runtime_enabled": True,
+            "canon_approved": True,
+            "publication_approved": True,
+        }
+
+        cls.prerequisite = Evidence.objects.create(
+            case=cls.case,
+            evidence_id="E01",
+            name="SECRET_FIRST_EVIDENCE",
+            metadata=cls.approved_metadata.copy(),
+        )
+
+        cls.target = Evidence.objects.create(
+            case=cls.case,
+            evidence_id="E02",
+            name="SECRET_SECOND_EVIDENCE",
+            metadata=cls.approved_metadata.copy(),
+        )
+
+        EvidencePrerequisite.objects.create(
+            dependent=cls.target,
+            prerequisite=cls.prerequisite,
+        )
+
+        cls.admin = get_user_model().objects.create_user(
+            username="evidence_api_admin",
+            password="TestPassword123!",
+            is_staff=True,
+        )
+
+        cls.url = reverse(
+            "internal-evidence-requirements",
+            kwargs={
+                "case_id": "CASE-001",
+                "evidence_id": "E02",
+            },
+        )
+
+    def authenticated_get(self, url=None):
+        return self.client.get(
+            url or self.url,
+            HTTP_X_CONTENT_SERVICE_TOKEN=self.TEST_TOKEN,
+        )
+
+    def test_valid_token_returns_prerequisites(self):
+        """승인된 증거의 선행 조건만 반환합니다."""
+        response = self.authenticated_get()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.data,
+            {
+                "evidence_id": "E02",
+                "prerequisites": ["E01"],
+                "player_unlock_verification_required": True,
+            },
+        )
+
+        body = response.content.decode("utf-8")
+        self.assertNotIn("SECRET_FIRST_EVIDENCE", body)
+        self.assertNotIn("SECRET_SECOND_EVIDENCE", body)
+        self.assertNotIn("runtime_enabled", body)
+
+    def test_evidence_without_prerequisites(self):
+        """선행 조건이 없으면 빈 배열을 반환합니다."""
+        url = reverse(
+            "internal-evidence-requirements",
+            kwargs={
+                "case_id": "CASE-001",
+                "evidence_id": "E01",
+            },
+        )
+
+        response = self.authenticated_get(url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.data["prerequisites"],
+            [],
+        )
+
+    def test_missing_token_returns_403(self):
+        """토큰 없는 요청은 차단합니다."""
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_invalid_token_returns_403(self):
+        """잘못된 토큰은 차단합니다."""
+        response = self.client.get(
+            self.url,
+            HTTP_X_CONTENT_SERVICE_TOKEN="invalid",
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_admin_session_cannot_bypass_token(self):
+        """관리자 세션으로 서버 인증을 우회할 수 없습니다."""
+        self.client.force_login(self.admin)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+    @override_settings(CONTENT_SERVICE_TOKEN="")
+    def test_unconfigured_token_fails_closed(self):
+        """서버 토큰 미설정 시 접근을 거부합니다."""
+        response = self.authenticated_get()
+        self.assertEqual(response.status_code, 403)
+
+    def test_draft_case_returns_404(self):
+        """게시되지 않은 사건의 증거는 조회할 수 없습니다."""
+        self.case.status = Case.Status.DRAFT
+        self.case.save()
+
+        response = self.authenticated_get()
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_unapproved_target_returns_404(self):
+        """조회 대상 증거 자체가 미승인이면 차단합니다."""
+        self.target.metadata = {
+            "runtime_enabled": False,
+        }
+        self.target.save()
+
+        response = self.authenticated_get()
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_unapproved_prerequisite_returns_404(self):
+        """미승인 선행 증거가 있으면 전체 응답을 차단합니다."""
+        self.prerequisite.metadata = {
+            "runtime_enabled": False,
+        }
+        self.prerequisite.save()
+
+        response = self.authenticated_get()
+
+        self.assertEqual(response.status_code, 404)
+        self.assertNotIn(
+            '"E01"',
+            response.content.decode("utf-8"),
+        )
+
+    def test_cross_case_prerequisite_returns_404(self):
+        """비정상적인 교차 사건 선행 관계도 차단합니다."""
+        another_case = Case.objects.create(
+            case_id="CASE-002",
+            title="다른 사건",
+            status=Case.Status.PUBLISHED,
+        )
+
+        foreign_evidence = Evidence.objects.create(
+            case=another_case,
+            evidence_id="E03",
+            name="SECRET_FOREIGN_EVIDENCE",
+            metadata=self.approved_metadata.copy(),
+        )
+
+        # 손상된 레거시 데이터를 재현합니다.
+        # ORM create()는 full_clean()을 자동 호출하지 않습니다.
+        EvidencePrerequisite.objects.create(
+            dependent=self.target,
+            prerequisite=foreign_evidence,
+        )
+
+        response = self.authenticated_get()
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_unknown_evidence_returns_404(self):
+        """존재하지 않는 증거는 404를 반환합니다."""
+        url = reverse(
+            "internal-evidence-requirements",
+            kwargs={
+                "case_id": "CASE-001",
+                "evidence_id": "E30",
+            },
+        )
+
+        response = self.authenticated_get(url)
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_post_returns_405(self):
+        """조회 전용 API의 변경 요청은 차단합니다."""
+        response = self.client.post(
+            self.url,
+            {"prerequisites": []},
+            format="json",
+            HTTP_X_CONTENT_SERVICE_TOKEN=self.TEST_TOKEN,
+        )
+
+        self.assertEqual(response.status_code, 405)

@@ -3,8 +3,21 @@
 
 from django.contrib import admin
 
-from .models import Case, Chapter, Character, Evidence, EvidencePrerequisite, StoryEvent, ContentRelease
-
+from .models import (
+    Case,
+    Chapter,
+    Character,
+    Evidence,
+    EvidencePrerequisite,
+    StoryEvent,
+    ContentRelease,
+    Scene,
+    NPCCard,
+    NPCDialogueTrigger,
+    EvidenceLink,
+    CharacterRelationship,
+    Objective,
+)
 
 @admin.register(Case)
 class CaseAdmin(admin.ModelAdmin):
@@ -406,3 +419,204 @@ class ContentReleaseAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         """게시된 콘텐츠의 삭제를 금지합니다."""
         return False
+
+
+@admin.register(Scene)
+class SceneAdmin(admin.ModelAdmin):
+    """스토리 장면 관리."""
+
+    list_display = (
+        "scene_id", "title", "case", "chapter", "visibility"
+    )
+    search_fields = (
+        "scene_id", "title", "case__case_id", "chapter__code"
+    )
+    list_filter = ("case", "visibility")
+    ordering = ("case__case_id", "chapter__order", "scene_id")
+    list_select_related = ("case", "chapter")
+    autocomplete_fields = ("case", "chapter")
+
+
+@admin.register(NPCCard)
+class NPCCardAdmin(admin.ModelAdmin):
+    """NPC 지식 및 잡담 카드 관리."""
+
+    list_display = ("card_id", "character", "card_type")
+    search_fields = (
+        "card_id",
+        "content",
+        "character__character_id",
+        "character__name",
+    )
+    list_filter = ("card_type", "character__case")
+    ordering = ("character__character_id", "card_id")
+    list_select_related = ("character",)
+    autocomplete_fields = ("character",)
+
+    fieldsets = (
+        ("기본 정보", {
+            "fields": ("character", "card_id", "card_type"),
+        }),
+        ("카드 내용", {
+            "fields": ("content",),
+        }),
+        ("공개 조건 및 내부 정보", {
+            "fields": ("disclosure_policy", "metadata"),
+            "classes": ("collapse",),
+        }),
+    )
+
+
+@admin.register(NPCDialogueTrigger)
+class NPCDialogueTriggerAdmin(admin.ModelAdmin):
+    """NPC 대화 트리거 관리."""
+
+    list_display = (
+        "trigger_id",
+        "character",
+        "stage",
+        "trigger_type",
+        "output_mode",
+        "is_active",
+    )
+    search_fields = (
+        "trigger_id",
+        "response_text",
+        "character__name",
+    )
+    list_filter = (
+        "stage",
+        "trigger_type",
+        "output_mode",
+        "is_active",
+    )
+    ordering = ("character__character_id", "stage", "output_order")
+    list_select_related = ("character",)
+    autocomplete_fields = ("character",)
+
+    fieldsets = (
+        ("트리거 기본 정보", {
+            "fields": (
+                "character",
+                "trigger_id",
+                "stage",
+                "trigger_type",
+            ),
+        }),
+        ("대사 설정", {
+            "fields": (
+                "output_mode",
+                "response_text",
+                "condition_key",
+                "output_order",
+            ),
+        }),
+        ("활성화 및 내부 조건", {
+            "fields": ("is_active", "metadata"),
+        }),
+    )
+
+
+@admin.register(EvidenceLink)
+class EvidenceLinkAdmin(admin.ModelAdmin):
+    """증거 간 추론 관계 관리."""
+
+    list_display = (
+        "from_evidence",
+        "to_evidence",
+        "relationship",
+        "needs_canon_approval",
+        "is_active",
+    )
+    search_fields = (
+        "from_evidence__evidence_id",
+        "to_evidence__evidence_id",
+        "relationship",
+        "resulting_inference",
+    )
+    list_filter = ("needs_canon_approval", "is_active")
+    list_select_related = ("from_evidence", "to_evidence")
+    autocomplete_fields = ("from_evidence", "to_evidence")
+
+    fieldsets = (
+        ("증거 연결", {
+            "fields": (
+                "from_evidence",
+                "to_evidence",
+                "relationship",
+                "resulting_inference",
+            ),
+        }),
+        ("정본 승인 및 활성화", {
+            "fields": (
+                "needs_canon_approval",
+                "is_active",
+            ),
+        }),
+        ("추가 정보", {
+            "fields": ("metadata",),
+            "classes": ("collapse",),
+        }),
+    )
+
+
+@admin.register(CharacterRelationship)
+class CharacterRelationshipAdmin(admin.ModelAdmin):
+    """NPC와 NPC·증거·외부 인물 간 관계 관리."""
+
+    list_display = (
+        "source_character",
+        "target_type",
+        "target_id",
+        "public_from_stage",
+        "is_active",
+    )
+    search_fields = (
+        "source_character__character_id",
+        "source_character__name",
+        "target_id",
+        "relationship",
+    )
+    list_filter = (
+        "target_type",
+        "public_from_stage",
+        "is_active",
+    )
+    list_select_related = ("source_character",)
+    autocomplete_fields = ("source_character",)
+
+
+@admin.register(Objective)
+class ObjectiveAdmin(admin.ModelAdmin):
+    """플레이어 목표 및 힌트 관리."""
+
+    list_display = (
+        "objective_id",
+        "chapter",
+        "is_active",
+    )
+    search_fields = (
+        "objective_id",
+        "player_goal",
+        "chapter__code",
+    )
+    list_filter = ("chapter__case", "is_active")
+    ordering = ("chapter__order", "objective_id")
+    list_select_related = ("chapter",)
+    autocomplete_fields = ("chapter",)
+
+    fieldsets = (
+        ("목표 정보", {
+            "fields": (
+                "chapter",
+                "objective_id",
+                "player_goal",
+            ),
+        }),
+        ("힌트 및 완료 조건", {
+            "fields": ("hints", "completion_rule"),
+        }),
+        ("활성화 및 추가 정보", {
+            "fields": ("is_active", "metadata"),
+        }),
+    )

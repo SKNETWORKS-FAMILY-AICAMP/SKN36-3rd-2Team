@@ -128,6 +128,384 @@ class Chapter(models.Model):
         return f"{self.code} - {self.title}"
 
 
+class Scene(models.Model):
+    """사건별 스토리 장면과 공개 조건을 관리합니다."""
+
+    class Visibility(models.TextChoices):
+        ENGINE_ONLY = "ENGINE_ONLY", "서버 전용"
+        NPC_KNOWLEDGE = "NPC_KNOWLEDGE", "NPC 전용"
+        UNLOCKED_ONLY = "UNLOCKED_ONLY", "해금 후 공개"
+        PLAYER_VISIBLE = "PLAYER_VISIBLE", "기본 공개"
+
+    case = models.ForeignKey(
+        Case,
+        on_delete=models.PROTECT,
+        related_name="scenes",
+        verbose_name="소속 사건",
+    )
+
+    chapter = models.ForeignKey(
+        Chapter,
+        on_delete=models.PROTECT,
+        related_name="scenes",
+        verbose_name="소속 챕터",
+    )
+
+    scene_id = models.CharField(
+        max_length=10,
+        validators=[
+            RegexValidator(
+                regex=r"^SC-\d{4}$",
+                message="장면 ID는 SC-0001 형식이어야 합니다.",
+            ),
+        ],
+        verbose_name="장면 ID",
+    )
+
+    title = models.CharField(
+        max_length=200,
+        verbose_name="장면 제목",
+    )
+
+    scene_text = models.TextField(
+        verbose_name="장면 원고",
+    )
+
+    visibility = models.CharField(
+        max_length=20,
+        choices=Visibility.choices,
+        default=Visibility.UNLOCKED_ONLY,
+        verbose_name="공개 수준",
+    )
+
+    metadata = models.JSONField(
+        default=dict,
+        blank=True,
+        verbose_name="장면 메타데이터",
+    )
+
+    def clean(self):
+        """챕터 소속과 메타데이터 구조를 검증합니다."""
+        super().clean()
+
+        errors = {}
+
+        if self.case_id and self.chapter_id:
+            if Chapter.objects.filter(
+                pk=self.chapter_id
+            ).exclude(case_id=self.case_id).exists():
+                errors["chapter"] = (
+                    "장면과 챕터는 동일한 사건에 속해야 합니다."
+                )
+
+        if not isinstance(self.metadata, dict):
+            errors["metadata"] = (
+                "장면 메타데이터는 JSON 객체여야 합니다."
+            )
+
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        """ORM 저장 시에도 모델 유효성 검사를 수행합니다."""
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    class Meta:
+        db_table = "content_scene"
+        verbose_name = "스토리 장면"
+        verbose_name_plural = "스토리 장면 목록"
+        ordering = ["chapter__order", "scene_id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["case", "scene_id"],
+                name="unique_scene_case_id",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(
+                    visibility__in=[
+                        "ENGINE_ONLY",
+                        "NPC_KNOWLEDGE",
+                        "UNLOCKED_ONLY",
+                        "PLAYER_VISIBLE",
+                    ]
+                ),
+                name="scene_valid_visibility",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.scene_id} - {self.title}"
+
+
+class NPCCard(models.Model):
+    """NPC의 지식 카드와 잡담 카드를 관리합니다."""
+
+    class CardType(models.TextChoices):
+        KNOWLEDGE = "KNOWLEDGE", "지식 카드"
+        SMALLTALK = "SMALLTALK", "잡담 카드"
+
+    character = models.ForeignKey(
+        "Character",
+        on_delete=models.PROTECT,
+        related_name="cards",
+        verbose_name="소속 NPC",
+    )
+
+    card_id = models.CharField(
+        max_length=20,
+        validators=[
+            RegexValidator(
+                regex=r"^K-C(0[1-9]|10)-(?:[0-9]{2}|S[0-9]{2})$",
+                message="카드 ID는 K-C01-01 또는 K-C01-S01 형식이어야 합니다.",
+            )
+        ],
+        verbose_name="카드 ID",
+    )
+
+    card_type = models.CharField(
+        max_length=20,
+        choices=CardType.choices,
+        verbose_name="카드 유형",
+    )
+
+    content = models.TextField(
+        verbose_name="카드 내용",
+    )
+
+    disclosure_policy = models.JSONField(
+        default=dict,
+        blank=True,
+        verbose_name="공개 조건",
+    )
+
+    metadata = models.JSONField(
+        default=dict,
+        blank=True,
+        verbose_name="카드 메타데이터",
+    )
+
+    def clean(self):
+        """NPC 소속, 카드 유형 및 JSON 구조를 검증합니다."""
+        super().clean()
+
+        errors = {}
+
+        if not isinstance(self.disclosure_policy, dict):
+            errors["disclosure_policy"] = (
+                "공개 조건은 JSON 객체여야 합니다."
+            )
+
+        if not isinstance(self.metadata, dict):
+            errors["metadata"] = (
+                "메타데이터는 JSON 객체여야 합니다."
+            )
+
+        if self.card_id:
+            suffix = self.card_id.rsplit("-", 1)[-1]
+
+            if self.card_type == self.CardType.KNOWLEDGE:
+                if suffix.startswith("S"):
+                    errors["card_id"] = (
+                        "지식 카드에는 일반 카드 ID를 사용해야 합니다."
+                    )
+
+            elif self.card_type == self.CardType.SMALLTALK:
+                if not suffix.startswith("S"):
+                    errors["card_id"] = (
+                        "잡담 카드 ID에는 S 접두사가 필요합니다."
+                    )
+
+        if self.character_id and self.card_id:
+            npc_id = Character.objects.filter(
+                pk=self.character_id,
+            ).values_list(
+                "character_id", flat=True
+            ).first()
+
+            if npc_id and not self.card_id.startswith(
+                f"K-{npc_id}-"
+            ):
+                errors["card_id"] = (
+                    "카드 ID와 소속 NPC의 ID가 일치해야 합니다."
+                )
+
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        """저장 전 카드의 유효성을 검사합니다."""
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    class Meta:
+        db_table = "content_npc_card"
+        verbose_name = "NPC 카드"
+        verbose_name_plural = "NPC 카드 목록"
+        ordering = ["character__character_id", "card_id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["character", "card_id"],
+                name="unique_npc_card_character_id",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.card_id} - {self.get_card_type_display()}"
+
+
+class NPCDialogueTrigger(models.Model):
+    """NPC 대화 트리거와 고정·참고 대사를 관리합니다."""
+
+    class TriggerType(models.TextChoices):
+        QUESTION = "question", "일반 질문"
+        VERBAL_ONLY = "verbal_only", "증거 없는 대화"
+        EVIDENCE = "evidence", "단일 증거"
+        EVIDENCE_COMBO = "evidence_combo", "증거 조합"
+
+    class OutputMode(models.TextChoices):
+        FIXED = "fixed", "고정 대사"
+        REFERENCE = "reference", "참고 대사"
+
+    character = models.ForeignKey(
+        "Character",
+        on_delete=models.PROTECT,
+        related_name="dialogue_triggers",
+        verbose_name="소속 NPC",
+    )
+
+    trigger_id = models.CharField(
+        max_length=20,
+        unique=True,
+        validators=[
+            RegexValidator(
+                regex=r"^DT-C(0[1-9]|10)-\d{3}$",
+                message="트리거 ID는 DT-C01-001 형식이어야 합니다.",
+            )
+        ],
+        verbose_name="대화 트리거 ID",
+    )
+
+    stage = models.PositiveSmallIntegerField(
+        verbose_name="NPC 대화 단계",
+    )
+
+    trigger_type = models.CharField(
+        max_length=30,
+        choices=TriggerType.choices,
+        verbose_name="트리거 유형",
+    )
+
+    output_mode = models.CharField(
+        max_length=20,
+        choices=OutputMode.choices,
+        verbose_name="대사 출력 방식",
+    )
+
+    response_text = models.TextField(
+        verbose_name="대사 원문",
+    )
+
+    condition_key = models.CharField(
+        max_length=100,
+        verbose_name="발동 조건 키",
+    )
+
+    output_order = models.PositiveIntegerField(
+        default=1,
+        verbose_name="출력 순서",
+    )
+
+    is_active = models.BooleanField(
+        default=False,
+        verbose_name="활성화 여부",
+    )
+
+    metadata = models.JSONField(
+        default=dict,
+        blank=True,
+        verbose_name="대화 메타데이터",
+    )
+
+    def clean(self):
+        """NPC 소속, 단계 및 메타데이터 구조를 검증합니다."""
+        super().clean()
+
+        errors = {}
+
+        if self.stage is not None and self.stage not in (1, 2, 3):
+            errors["stage"] = "대화 단계는 1~3이어야 합니다."
+
+        if self.output_order is not None and self.output_order < 1:
+            errors["output_order"] = (
+                "출력 순서는 1 이상이어야 합니다."
+            )
+
+        if not isinstance(self.metadata, dict):
+            errors["metadata"] = (
+                "대화 메타데이터는 JSON 객체여야 합니다."
+            )
+
+        if self.character_id and self.trigger_id:
+            npc_id = self.character.__class__.objects.filter(
+                pk=self.character_id
+            ).values_list(
+                "character_id", flat=True
+            ).first()
+
+            if npc_id and not self.trigger_id.startswith(
+                f"DT-{npc_id}-"
+            ):
+                errors["trigger_id"] = (
+                    "트리거 ID와 소속 NPC가 일치해야 합니다."
+                )
+
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        """저장 전 대화 트리거의 유효성을 검증합니다."""
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    class Meta:
+        db_table = "content_npc_dialogue_trigger"
+        verbose_name = "NPC 대화 트리거"
+        verbose_name_plural = "NPC 대화 트리거 목록"
+
+        ordering = [
+            "character__character_id",
+            "stage",
+            "output_order",
+            "trigger_id",
+        ]
+
+        indexes = [
+            models.Index(
+                fields=["character", "stage", "trigger_type"],
+                name="npc_trigger_lookup_idx",
+            ),
+        ]
+
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(stage__gte=1, stage__lte=3),
+                name="npc_trigger_valid_stage",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(output_order__gte=1),
+                name="npc_trigger_valid_order",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return (
+            f"{self.trigger_id} - "
+            f"{self.
+            get_output_mode_display()}"
+        )
+
+
 class Character(models.Model):
     """사건별 NPC의 공개 프로필과 내부 메타데이터를 관리합니다."""
 
@@ -179,6 +557,439 @@ class Character(models.Model):
 
     def __str__(self) -> str:
         return f"{self.character_id} - {self.name}"
+
+
+class EvidenceLink(models.Model):
+    """증거 간 추론 및 연관 관계를 관리합니다."""
+
+    from_evidence = models.ForeignKey(
+        "Evidence",
+        on_delete=models.PROTECT,
+        related_name="outgoing_links",
+        verbose_name="출발 증거",
+    )
+
+    to_evidence = models.ForeignKey(
+        "Evidence",
+        on_delete=models.PROTECT,
+        related_name="incoming_links",
+        verbose_name="연결 증거",
+    )
+
+    relationship = models.CharField(
+        max_length=100,
+        verbose_name="추론 관계 유형",
+    )
+
+    resulting_inference = models.CharField(
+        max_length=100,
+        blank=True,
+        verbose_name="도출되는 추론 ID",
+    )
+
+    needs_canon_approval = models.BooleanField(
+        default=True,
+        verbose_name="정본 승인 필요",
+    )
+
+    is_active = models.BooleanField(
+        default=False,
+        verbose_name="게임 적용 여부",
+    )
+
+    metadata = models.JSONField(
+        default=dict,
+        blank=True,
+        verbose_name="추론 관계 메타데이터",
+    )
+
+    def clean(self):
+        """증거 관계의 참조 무결성과 승인 상태를 검증합니다."""
+        super().clean()
+
+        errors = {}
+
+        if self.from_evidence_id and self.to_evidence_id:
+            if self.from_evidence_id == self.to_evidence_id:
+                errors["to_evidence"] = (
+                    "증거는 자기 자신과 연결할 수 없습니다."
+                )
+            else:
+                evidence_cases = dict(
+                    Evidence.objects.filter(
+                        pk__in=[
+                            self.from_evidence_id,
+                            self.to_evidence_id,
+                        ]
+                    ).values_list("pk", "case_id")
+                )
+
+                from_case = evidence_cases.get(
+                    self.from_evidence_id
+                )
+                to_case = evidence_cases.get(
+                    self.to_evidence_id
+                )
+
+                if (
+                    from_case is not None
+                    and to_case is not None
+                    and from_case != to_case
+                ):
+                    errors["to_evidence"] = (
+                        "같은 사건에 속한 증거만 연결할 수 있습니다."
+                    )
+
+        if not isinstance(self.metadata, dict):
+            errors["metadata"] = (
+                "메타데이터는 JSON 객체여야 합니다."
+            )
+
+        if self.is_active and self.needs_canon_approval:
+            errors["is_active"] = (
+                "정본 승인이 필요한 추론 관계는 "
+                "활성화할 수 없습니다."
+            )
+
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        """저장 전 추론 관계의 유효성을 검증합니다."""
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    class Meta:
+        db_table = "content_evidence_link"
+        verbose_name = "증거 추론 관계"
+        verbose_name_plural = "증거 추론 관계 목록"
+
+        ordering = [
+            "from_evidence__evidence_id",
+            "to_evidence__evidence_id",
+        ]
+
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "from_evidence",
+                    "to_evidence",
+                    "relationship",
+                ],
+                name="unique_evidence_link_relation",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(is_active=False)
+                    | models.Q(needs_canon_approval=False)
+                ),
+                name="evidence_link_approval_required",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return (
+            f"{self.from_evidence.evidence_id} → "
+            f"{self.to_evidence.evidence_id} "
+            f"({self.relationship})"
+        )
+
+
+class CharacterRelationship(models.Model):
+    """NPC와 다른 NPC·증거·외부 인물 간 관계를 관리합니다."""
+
+    class TargetType(models.TextChoices):
+        NPC = "npc", "NPC"
+        EVIDENCE = "evidence", "증거"
+        PERSON = "person", "외부 인물"
+
+    source_character = models.ForeignKey(
+        "Character",
+        on_delete=models.PROTECT,
+        related_name="outgoing_relationships",
+        verbose_name="출발 NPC",
+    )
+
+    target_type = models.CharField(
+        max_length=20,
+        choices=TargetType.choices,
+        verbose_name="관계 대상 유형",
+    )
+
+    target_id = models.CharField(
+        max_length=100,
+        verbose_name="관계 대상 ID",
+    )
+
+    relationship = models.TextField(
+        verbose_name="관계 설명",
+    )
+
+    public_from_stage = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
+        verbose_name="최소 공개 단계",
+    )
+
+    is_active = models.BooleanField(
+        default=False,
+        verbose_name="활성화 여부",
+    )
+
+    metadata = models.JSONField(
+        default=dict,
+        blank=True,
+        verbose_name="관계 메타데이터",
+    )
+
+    def clean(self):
+        """관계 대상, 사건 일치 여부 및 공개 조건을 검증합니다."""
+        super().clean()
+
+        errors = {}
+
+        if not isinstance(self.metadata, dict):
+            errors["metadata"] = (
+                "관계 메타데이터는 JSON 객체여야 합니다."
+            )
+
+        if (
+            self.public_from_stage is not None
+            and self.public_from_stage not in (1, 2, 3)
+        ):
+            errors["public_from_stage"] = (
+                "공개 단계는 1~3이어야 합니다."
+            )
+
+        if self.is_active and self.public_from_stage is None:
+            errors["is_active"] = (
+                "공개 단계가 확정되지 않은 관계는 "
+                "활성화할 수 없습니다."
+            )
+
+        if not self.target_id or not self.target_id.strip():
+            errors["target_id"] = (
+                "관계 대상 ID를 입력해야 합니다."
+            )
+
+        if self.source_character_id and self.target_id:
+            case_id = Character.objects.filter(
+                pk=self.source_character_id
+            ).values_list(
+                "case_id", flat=True
+            ).first()
+
+            if case_id is not None:
+                if self.target_type == self.TargetType.NPC:
+                    exists = Character.objects.filter(
+                        case_id=case_id,
+                        character_id=self.target_id,
+                    ).exists()
+
+                    if not exists:
+                        errors["target_id"] = (
+                            "같은 사건에 소속된 NPC만 "
+                            "관계 대상으로 지정할 수 있습니다."
+                        )
+
+                elif self.target_type == self.TargetType.EVIDENCE:
+                    exists = Evidence.objects.filter(
+                        case_id=case_id,
+                        evidence_id=self.target_id,
+                    ).exists()
+
+                    if not exists:
+                        errors["target_id"] = (
+                            "같은 사건에 소속된 증거만 "
+                            "관계 대상으로 지정할 수 있습니다."
+                        )
+
+                # 외부 인물(person)은 아직 전용 모델이 없으므로
+                # 원본 식별자를 보존하고 상세 검증은 Import에서 수행합니다.
+
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        """저장 전 관계 무결성을 검증합니다."""
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    class Meta:
+        db_table = "content_character_relationship"
+        verbose_name = "인물 관계"
+        verbose_name_plural = "인물 관계 목록"
+
+        ordering = [
+            "source_character__character_id",
+            "target_type",
+            "target_id",
+        ]
+
+        indexes = [
+            models.Index(
+                fields=["source_character", "target_type"],
+                name="npc_relation_lookup_idx",
+            ),
+        ]
+
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(
+                    target_type__in=["npc", "evidence", "person"]
+                ),
+                name="npc_relation_valid_target",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(public_from_stage__isnull=True)
+                    | models.Q(
+                        public_from_stage__gte=1,
+                        public_from_stage__lte=3,
+                    )
+                ),
+                name="npc_relation_valid_stage",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(is_active=False)
+                    | models.Q(public_from_stage__isnull=False)
+                ),
+                name="npc_relation_active_stage",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return (
+            f"{self.source_character.character_id} → "
+            f"{self.target_type}:{self.target_id}"
+        )
+
+
+class Objective(models.Model):
+    """플레이어 목표와 단계별 힌트를 관리합니다."""
+
+    chapter = models.ForeignKey(
+        "Chapter",
+        on_delete=models.PROTECT,
+        related_name="objectives",
+        verbose_name="소속 챕터",
+    )
+
+    objective_id = models.CharField(
+        max_length=64,
+        validators=[
+            RegexValidator(
+                regex=r"^OBJ_(?:\d{3}|[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*)$",
+                message=(
+                    "목표 ID는 OBJ_001 또는 "
+                    "OBJ_FIND_STUDENT_RECORD 형식이어야 합니다."
+                ),
+            ),
+        ],
+        verbose_name="목표 ID",
+    )
+
+    player_goal = models.TextField(
+        verbose_name="플레이어 목표",
+    )
+
+    hints = models.JSONField(
+        default=list,
+        blank=True,
+        verbose_name="단계별 힌트",
+    )
+
+    completion_rule = models.JSONField(
+        default=dict,
+        blank=True,
+        verbose_name="목표 완료 조건",
+    )
+
+    is_active = models.BooleanField(
+        default=False,
+        verbose_name="게임 적용 여부",
+    )
+
+    metadata = models.JSONField(
+        default=dict,
+        blank=True,
+        verbose_name="목표 메타데이터",
+    )
+
+    def clean(self):
+        """힌트 구조와 목표 활성화 조건을 검증합니다."""
+        super().clean()
+
+        errors = {}
+
+        if not isinstance(self.hints, list):
+            errors["hints"] = (
+                "힌트는 JSON 배열이어야 합니다."
+            )
+        elif (
+            len(self.hints) > 3
+            or any(
+                not isinstance(hint, str)
+                or not hint.strip()
+                for hint in self.hints
+            )
+        ):
+            errors["hints"] = (
+                "힌트는 최대 3개의 비어 있지 않은 "
+                "문자열이어야 합니다."
+            )
+
+        if not isinstance(self.completion_rule, dict):
+            errors["completion_rule"] = (
+                "완료 조건은 JSON 객체여야 합니다."
+            )
+
+        if not isinstance(self.metadata, dict):
+            errors["metadata"] = (
+                "목표 메타데이터는 JSON 객체여야 합니다."
+            )
+
+        if (
+            self.is_active
+            and (
+                not isinstance(self.completion_rule, dict)
+                or not self.completion_rule
+            )
+        ):
+            errors["is_active"] = (
+                "완료 조건이 정의되지 않은 목표는 "
+                "활성화할 수 없습니다."
+            )
+
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        """저장 전 목표의 유효성을 검증합니다."""
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    class Meta:
+        db_table = "content_objective"
+
+        verbose_name = "플레이어 목표"
+        verbose_name_plural = "플레이어 목표 목록"
+
+        ordering = [
+            "chapter__order",
+            "objective_id",
+        ]
+
+        constraints = [
+            models.UniqueConstraint(
+                fields=["chapter", "objective_id"],
+                name="unique_objective_chapter_id",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.objective_id} - {self.player_goal[:30]}"
 
 
 class Evidence(models.Model):

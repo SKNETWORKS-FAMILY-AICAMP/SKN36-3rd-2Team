@@ -13,6 +13,13 @@ from .models import (
     Evidence,
     EvidencePrerequisite,
     StoryEvent,
+    ContentRelease,
+    Scene,
+    NPCCard,
+    NPCDialogueTrigger,
+    EvidenceLink,
+    CharacterRelationship,
+    Objective,
 )
 from django.db.models.deletion import ProtectedError
 from .models import ContentRelease
@@ -766,6 +773,48 @@ class ContentAdminTests(TestCase):
             checksum="sha256:" + "a" * 64,
         )
 
+    def test_extended_admin_add_forms_accessible(self):
+        """신규 모델 6개의 Admin 생성 화면이 정상적으로 열리는지 확인합니다."""
+
+        models = (
+            "scene",
+            "npccard",
+            "npcdialoguetrigger",
+            "evidencelink",
+            "characterrelationship",
+            "objective",
+        )
+
+        for model_name in models:
+            with self.subTest(model=model_name):
+                url = reverse(f"admin:content_{model_name}_add")
+                response = self.client.get(url)
+
+                self.assertEqual(response.status_code, 200)
+                self.assertContains(response, 'name="_save"')
+
+    def test_extended_admin_changelists_accessible(self):
+        """신규 콘텐츠 모델 6개의 관리자 목록 접근을 검증합니다."""
+
+        models = (
+            "scene",
+            "npccard",
+            "npcdialoguetrigger",
+            "evidencelink",
+            "characterrelationship",
+            "objective",
+        )
+
+        for model_name in models:
+            with self.subTest(model=model_name):
+                url = reverse(
+                    f"admin:content_{model_name}_changelist"
+                )
+
+                response = self.client.get(url)
+
+                self.assertEqual(response.status_code, 200)
+
     def setUp(self):
         self.client.force_login(self.admin_user)
 
@@ -1092,3 +1141,243 @@ class ContentAdminFormIntegrationTests(TestCase):
                 event_key="EVT-CH01-001"
             ).exists()
         )
+
+    def test_scene_admin_create(self):
+        """Admin에서 정상적인 스토리 장면을 생성합니다."""
+        response = self.post_add("scene", {
+            "case": self.case.pk,
+            "chapter": self.chapter.pk,
+            "scene_id": "SC-0001",
+            "title": "프롤로그",
+            "scene_text": "사건이 시작됩니다.",
+            "visibility": "UNLOCKED_ONLY",
+            "metadata": "{}",
+            "_save": "Save",
+        })
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(
+            Scene.objects.filter(
+                case=self.case,
+                scene_id="SC-0001",
+            ).exists()
+        )
+
+    def test_scene_admin_cross_case_rejected(self):
+        """다른 사건의 챕터를 연결하면 저장을 거부합니다."""
+        response = self.post_add("scene", {
+            "case": self.other_case.pk,
+            "chapter": self.chapter.pk,
+            "scene_id": "SC-0002",
+            "title": "잘못된 장면",
+            "scene_text": "사건이 일치하지 않습니다.",
+            "visibility": "UNLOCKED_ONLY",
+            "metadata": "{}",
+            "_save": "Save",
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(
+            "chapter",
+            response.context["adminform"].form.errors,
+        )
+        self.assertFalse(
+            Scene.objects.filter(
+                scene_id="SC-0002",
+            ).exists()
+        )
+
+
+class ExtendedContentModelTests(TestCase):
+    """확장 콘텐츠 모델 6종의 저장 및 무결성 검증."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.case = Case.objects.create(
+            case_id="CASE-001",
+            title="확장 콘텐츠 테스트",
+        )
+        cls.other_case = Case.objects.create(
+            case_id="CASE-002",
+            title="다른 사건",
+        )
+
+        cls.chapter = Chapter.objects.create(
+            case=cls.case,
+            code="CH01",
+            order=1,
+            title="첫 번째 챕터",
+        )
+        cls.other_chapter = Chapter.objects.create(
+            case=cls.other_case,
+            code="CH01",
+            order=1,
+            title="다른 챕터",
+        )
+
+        cls.character = Character.objects.create(
+            case=cls.case,
+            character_id="C01",
+            name="테스트 NPC",
+        )
+
+        cls.e01 = Evidence.objects.create(
+            case=cls.case,
+            evidence_id="E01",
+            name="첫 번째 증거",
+        )
+        cls.e02 = Evidence.objects.create(
+            case=cls.case,
+            evidence_id="E02",
+            name="두 번째 증거",
+        )
+        cls.other_evidence = Evidence.objects.create(
+            case=cls.other_case,
+            evidence_id="E01",
+            name="다른 사건 증거",
+        )
+
+    # 1. Scene
+    def test_scene_creation(self):
+        scene = Scene.objects.create(
+            case=self.case,
+            chapter=self.chapter,
+            scene_id="SC-0001",
+            title="사건의 시작",
+            scene_text="첫 번째 장면입니다.",
+        )
+
+        self.assertEqual(
+            scene.visibility,
+            Scene.Visibility.UNLOCKED_ONLY,
+        )
+
+    def test_scene_cross_case_rejected(self):
+        with self.assertRaises(ValidationError):
+            Scene.objects.create(
+                case=self.case,
+                chapter=self.other_chapter,
+                scene_id="SC-0001",
+                title="잘못된 장면",
+                scene_text="다른 사건의 챕터",
+            )
+
+    # 2. NPCCard
+    def test_npc_card_creation(self):
+        card = NPCCard.objects.create(
+            character=self.character,
+            card_id="K-C01-01",
+            card_type=NPCCard.CardType.KNOWLEDGE,
+            content="NPC가 알고 있는 사실",
+        )
+
+        self.assertEqual(card.character, self.character)
+
+    def test_npc_card_id_mismatch_rejected(self):
+        with self.assertRaises(ValidationError):
+            NPCCard.objects.create(
+                character=self.character,
+                card_id="K-C02-01",
+                card_type=NPCCard.CardType.KNOWLEDGE,
+                content="다른 NPC의 카드",
+            )
+
+    # 3. NPCDialogueTrigger
+    def test_dialogue_trigger_creation(self):
+        trigger = NPCDialogueTrigger.objects.create(
+            character=self.character,
+            trigger_id="DT-C01-001",
+            stage=1,
+            trigger_type="question",
+            output_mode="fixed",
+            response_text="무엇을 알고 싶으신가요?",
+            condition_key="always",
+        )
+
+        self.assertFalse(trigger.is_active)
+
+    def test_invalid_dialogue_stage_rejected(self):
+        with self.assertRaises(ValidationError):
+            NPCDialogueTrigger.objects.create(
+                character=self.character,
+                trigger_id="DT-C01-002",
+                stage=4,
+                trigger_type="question",
+                output_mode="reference",
+                response_text="잘못된 단계",
+                condition_key="always",
+            )
+
+    # 4. EvidenceLink
+    def test_evidence_link_creation(self):
+        link = EvidenceLink.objects.create(
+            from_evidence=self.e01,
+            to_evidence=self.e02,
+            relationship="supports",
+        )
+
+        self.assertTrue(link.needs_canon_approval)
+        self.assertFalse(link.is_active)
+
+    def test_unapproved_evidence_link_rejected(self):
+        with self.assertRaises(ValidationError):
+            EvidenceLink.objects.create(
+                from_evidence=self.e01,
+                to_evidence=self.e02,
+                relationship="supports",
+                needs_canon_approval=True,
+                is_active=True,
+            )
+
+    def test_evidence_link_cross_case_rejected(self):
+        with self.assertRaises(ValidationError):
+            EvidenceLink.objects.create(
+                from_evidence=self.e01,
+                to_evidence=self.other_evidence,
+                relationship="supports",
+            )
+
+    # 5. CharacterRelationship
+    def test_character_relationship_creation(self):
+        relation = CharacterRelationship.objects.create(
+            source_character=self.character,
+            target_type="evidence",
+            target_id="E01",
+            relationship="NPC가 증거를 보유함",
+            public_from_stage=1,
+        )
+
+        self.assertFalse(relation.is_active)
+
+    def test_missing_relationship_target_rejected(self):
+        with self.assertRaises(ValidationError):
+            CharacterRelationship.objects.create(
+                source_character=self.character,
+                target_type="evidence",
+                target_id="E30",
+                relationship="존재하지 않는 증거",
+                public_from_stage=1,
+            )
+
+    # 6. Objective
+    def test_objective_creation(self):
+        objective = Objective.objects.create(
+            chapter=self.chapter,
+            objective_id="OBJ_001",
+            player_goal="사건 현장을 조사하세요.",
+            hints=["현장으로 이동하세요."],
+        )
+
+        self.assertFalse(objective.is_active)
+        self.assertEqual(objective.completion_rule, {})
+
+    def test_objective_without_rule_rejected(self):
+        with self.assertRaises(ValidationError):
+            Objective.objects.create(
+                chapter=self.chapter,
+                objective_id="OBJ_002",
+                player_goal="증거를 찾으세요.",
+                hints=["책상을 확인하세요."],
+                completion_rule={},
+                is_active=True,
+            )

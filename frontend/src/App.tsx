@@ -16,6 +16,7 @@ function OpenNotes() {
   return <Navigate to="/chat" replace />
 }
 import NotesPanel from './components/NotesPanel'
+import StoryEventOverlay from './components/StoryEventOverlay'
 
 export default function App() {
   return (
@@ -23,6 +24,7 @@ export default function App() {
     <HashRouter>
       <AnimatedRoutes />
       <NotesPanel />
+      <StoryEventOverlay />
       <div className="fx-grain" aria-hidden="true" />
       <div className="fx-vignette" aria-hidden="true" />
     </HashRouter>

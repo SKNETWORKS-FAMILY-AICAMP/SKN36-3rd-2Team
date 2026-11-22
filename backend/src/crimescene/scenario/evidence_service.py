@@ -37,6 +37,7 @@ def collect_evidence_atomic(
     acquisition_policy_ids: Mapping[str, str],
     evaluator: PolicyEvaluator,
     unlock_rules: Mapping[str, NPCUnlockRule],
+    django_prerequisites: tuple[str, ...] = (),
 ) -> EvidenceServiceResult:
     """증거 획득과 NPC 해금을 검증 후 한 번에 저장합니다."""
 
@@ -63,6 +64,17 @@ def collect_evidence_atomic(
     # 증거 보유자가 아닌 NPC를 통한 획득을 차단합니다.
     if isinstance(rule, EvidenceRule) and rule.holder != active_character_id:
         raise PermissionError("해당 NPC가 보유한 증거가 아닙니다.")
+
+    # Django에서 승인한 선행 조건도 최신 SQLite 상태로 검증합니다.
+    # 기존 증거 수집 정책을 대체하지 않고 추가 제약으로 적용합니다.
+    if evidence_id not in state.evidence:
+        for prerequisite_id in django_prerequisites:
+            previous = state.evidence.get(prerequisite_id)
+
+            if previous is None or previous.stage not in {"found", "resolved"}:
+                raise PermissionError(
+                    "Django 선행 증거 수집 조건을 충족하지 않았습니다."
+                )
 
     # 1. 증거 수집 조건 및 점수 검증
     collection = collect_evidence(

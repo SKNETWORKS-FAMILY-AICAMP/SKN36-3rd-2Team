@@ -7,7 +7,8 @@ from .views import CaseOverviewView, InternalCaseOverviewView
 
 # 기존 views import 목록에 추가
 from .views import InternalContentReadinessView, InternalPlayerSceneView, InternalEvidenceRequirementsView
-
+from .views import InternalApprovedNPCCardsView
+from .views import InternalApprovedStoryEventView
 
 urlpatterns = [
     path(
@@ -41,5 +42,16 @@ urlpatterns = [
         name="internal-evidence-requirements",
     ),
 
+    path(
+        "internal/cases/<str:case_id>/characters/<str:character_id>/cards/",
+        InternalApprovedNPCCardsView.as_view(),
+        name="internal-approved-npc-cards",
+    ),
+
+    path(
+        "internal/cases/<str:case_id>/events/<str:event_key>/",
+        InternalApprovedStoryEventView.as_view(),
+        name="internal-approved-story-event",
+    ),
 
 ]

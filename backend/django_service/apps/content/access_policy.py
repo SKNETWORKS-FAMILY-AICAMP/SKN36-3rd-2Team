@@ -5,11 +5,17 @@
 이 함수가 True여도 플레이어에게 즉시 공개할 수는 없습니다.
 """
 
-from .models import Case, Evidence, NPCCard, Objective, Scene
-
+from .models import (
+    Case,
+    Evidence,
+    NPCCard,
+    Objective,
+    Scene,
+    StoryEvent,
+)
 
 def is_runtime_approved(
-    content: Scene | Evidence | NPCCard | Objective,
+    content: Scene | Evidence | NPCCard | Objective | StoryEvent,
 ) -> bool:
     """명시적 승인이 없는 모든 콘텐츠를 거부합니다."""
 
@@ -48,6 +54,15 @@ def is_runtime_approved(
             and isinstance(content.completion_rule, dict)
             and bool(content.completion_rule)
             and metadata.get("completion_rule_approved") is True
+        )
+
+    if isinstance(content, StoryEvent):
+        return (
+            metadata.get("backend_contract_approved") is True
+            and isinstance(content.conditions, dict)
+            and bool(content.conditions)
+            and isinstance(content.payload, dict)
+            and bool(content.payload)
         )
 
     return False

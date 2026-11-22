@@ -1,19 +1,25 @@
 """Issue #62 - 게임 시작, 저장, 이어하기 및 NPC 선택 API."""
-import os
-from pathlib import Path
 
 import hashlib
 import hmac
+import os
+import re
 import secrets
 from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager
+from pathlib import Path
 
 from fastapi import Cookie, FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from neo4j.exceptions import Neo4jError, ServiceUnavailable, SessionExpired
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from crimescene.api.django_content_client import (
+    ContentServiceError,
+    ContentServiceNotFoundError,
+    DjangoContentClient,
+)
 from crimescene.chat.llm_client import LLMProviderError
 from crimescene.chat.npc_history_display import render_stored_npc_message
 from crimescene.chat.npc_persona import EXPECTED_CHARACTER_IDS
@@ -95,6 +101,31 @@ class GameResponse(BaseModel):
     events: list[dict[str, str]]
 
 
+class ContentChapterResponse(BaseModel):
+    """플레이어에게 공개할 챕터 기본 정보."""
+
+    code: str
+    order: int
+    title: str
+
+
+class GameContentOverviewResponse(BaseModel):
+    """게임 세션에 연결된 공개 사건 정보."""
+
+    caseId: str
+    title: str
+    chapters: list[ContentChapterResponse]
+
+
+class GameSceneResponse(BaseModel):
+    """플레이어에게 공개하는 스토리 장면."""
+
+    sceneId: str
+    chapter: str
+    title: str
+    sceneText: str
+
+
 class ChatRequest(BaseModel):
     """플레이어의 NPC 대화 요청."""
 
@@ -119,7 +150,6 @@ class ChatRequest(BaseModel):
             raise ValueError("질문이 비어 있습니다.")
 
         return question
-
 
 
 class ChatResponse(BaseModel):
@@ -543,6 +573,130 @@ def create_app(
         return game_response(state)
 
     # ========================================================
+    # API: 게시된 사건·챕터 개요 조회 (Django 콘텐츠 연동)
+    # ========================================================
+
+    @app.get(
+        "/api/games/{session_id}/content/overview",
+        response_model=GameContentOverviewResponse,
+    )
+    def get_game_content_overview(
+        session_id: str,
+        request: Request,
+        case001_owner: str | None = Cookie(default=None),
+    ) -> GameContentOverviewResponse:
+        """소유자가 접근 가능한 게시 사건의 개요만 반환합니다."""
+
+        # 클라이언트의 case_id를 신뢰하지 않고, 서버의 게임 상태를 조회합니다.
+        state = load_owned_request(session_id, request, case001_owner)
+
+        client = getattr(request.app.state, "django_content_client", None)
+        if not isinstance(client, DjangoContentClient):
+            raise HTTPException(
+                status_code=503,
+                detail="콘텐츠 서비스를 사용할 수 없습니다.",
+            )
+
+        try:
+            overview = client.get_case_overview(state.case_id)
+        except (ContentServiceError, ValueError):
+            # 내부 서비스 URL, 인증 토큰, 상세 오류를 외부에 노출하지 않습니다.
+            raise HTTPException(
+                status_code=503,
+                detail="콘텐츠 조회에 실패했습니다.",
+            ) from None
+
+        if (
+            overview.case.case_id != state.case_id
+            or overview.case.status != "PUBLISHED"
+        ):
+            raise HTTPException(
+                status_code=404,
+                detail="공개된 콘텐츠를 찾을 수 없습니다.",
+            )
+
+        return GameContentOverviewResponse(
+            caseId=overview.case.case_id,
+            title=overview.case.title,
+            chapters=[
+                ContentChapterResponse(
+                    code=chapter.code,
+                    order=chapter.order,
+                    title=chapter.title,
+                )
+                for chapter in overview.chapters
+            ],
+        )
+
+    @app.get(
+        "/api/games/{session_id}/content/scenes/{scene_id}",
+        response_model=GameSceneResponse,
+    )
+    def get_game_scene(
+        session_id: str,
+        scene_id: str,
+        request: Request,
+        case001_owner: str | None = Cookie(default=None),
+    ) -> GameSceneResponse:
+        """게임 세션에 허용된 스토리 장면만 공개합니다."""
+
+        # 반드시 Django 호출 이전에 게임 세션 소유권을 검증합니다.
+        state = load_owned_request(
+            session_id,
+            request,
+            case001_owner,
+        )
+
+        if re.fullmatch(r"SC-\d{4}", scene_id) is None:
+            raise HTTPException(
+                status_code=404,
+                detail="스토리 장면을 찾을 수 없습니다.",
+            )
+
+        client = getattr(
+            request.app.state,
+            "django_content_client",
+            None,
+        )
+
+        if not isinstance(client, DjangoContentClient):
+            raise HTTPException(
+                status_code=503,
+                detail="콘텐츠 서비스를 사용할 수 없습니다.",
+            )
+
+        try:
+            scene = client.get_player_scene(
+                state.case_id,
+                scene_id,
+            )
+        except ContentServiceNotFoundError:
+            raise HTTPException(
+                status_code=404,
+                detail="스토리 장면을 찾을 수 없습니다.",
+            ) from None
+        except (ContentServiceError, ValueError):
+            raise HTTPException(
+                status_code=503,
+                detail="스토리 장면을 조회할 수 없습니다.",
+            ) from None
+
+        # 아직 챕터 진행 상태가 없으므로 CH00만 허용합니다.
+        # Django의 PLAYER_VISIBLE 승인만으로 미래 챕터를 해금하지 않습니다.
+        if scene.chapter != "CH00":
+            raise HTTPException(
+                status_code=404,
+                detail="스토리 장면을 찾을 수 없습니다.",
+            )
+
+        return GameSceneResponse(
+            sceneId=scene.scene_id,
+            chapter=scene.chapter,
+            title=scene.title,
+            sceneText=scene.scene_text,
+        )
+
+    # ========================================================
     # API 3. 프롤로그 완료
     # ========================================================
 
@@ -947,6 +1101,40 @@ def create_app(
                 status_code=403, detail="이 증거의 수집 조건이 설정되지 않았습니다."
             )
 
+        # Django 콘텐츠 정책이 활성화된 경우에만 추가 검증합니다.
+        django_prerequisites: tuple[str, ...] = ()
+
+        if getattr(
+            request.app.state,
+            "django_evidence_gate_enabled",
+            False,
+        ):
+            client = getattr(
+                request.app.state,
+                "django_content_client",
+                None,
+            )
+
+            if not isinstance(client, DjangoContentClient):
+                raise HTTPException(
+                    status_code=503,
+                    detail="증거 공개 조건 검증 서비스를 사용할 수 없습니다.",
+                )
+
+            try:
+                requirements = client.get_evidence_requirements(
+                    state.case_id,
+                    evidence_id,
+                )
+            except (ContentServiceError, ValueError):
+                # Django 장애나 미승인 증거는 모두 수집을 차단합니다.
+                raise HTTPException(
+                    status_code=503,
+                    detail="증거 공개 조건을 확인할 수 없습니다.",
+                ) from None
+
+            django_prerequisites = tuple(requirements.prerequisites)
+
         try:
             result = collect_evidence_atomic(
                 session_id=session_id,
@@ -957,6 +1145,7 @@ def create_app(
                 acquisition_policy_ids=policy_ids,
                 evaluator=acquisition_evaluator,
                 unlock_rules=flags.npc_rules,
+                django_prerequisites=django_prerequisites,
             )
         except PermissionError:
             raise HTTPException(
@@ -1234,16 +1423,11 @@ def create_app(
         """세션 소유자에게 획득한 증거 사진만 제공합니다."""
 
         # 기존 세션 소유권 검증 재사용
-        state = load_owned_request(
-            session_id, request, case001_owner
-        )
+        state = load_owned_request(session_id, request, case001_owner)
 
         # 미획득 증거는 존재 여부까지 숨깁니다.
         evidence_state = state.evidence.get(evidence_id)
-        if (
-            evidence_state is None
-            or evidence_state.stage not in {"found", "resolved"}
-        ):
+        if evidence_state is None or evidence_state.stage not in {"found", "resolved"}:
             raise HTTPException(
                 status_code=404,
                 detail="증거를 찾을 수 없습니다.",
@@ -1263,11 +1447,7 @@ def create_app(
         image_dir = image_dir.resolve()
 
         # 별도 썸네일이 없다면 원본을 반환합니다.
-        stems = (
-            (f"{evidence_id}_thumb", evidence_id)
-            if thumbnail
-            else (evidence_id,)
-        )
+        stems = (f"{evidence_id}_thumb", evidence_id) if thumbnail else (evidence_id,)
 
         extensions = {
             ".png": "image/png",
@@ -1278,9 +1458,7 @@ def create_app(
 
         for stem in stems:
             for extension, media_type in extensions.items():
-                image_path = (
-                    image_dir / f"{stem}{extension}"
-                ).resolve()
+                image_path = (image_dir / f"{stem}{extension}").resolve()
 
                 # 이미지 디렉터리 밖의 파일 접근 방지
                 if not image_path.is_relative_to(image_dir):
@@ -1606,5 +1784,17 @@ def create_app(
             truth=None,
             game=game_response(state),
         )
+
+    # Issue #120: owner-scoped story event delivery.
+    from crimescene.api.story_event_http import (
+        create_story_event_router,
+    )
+
+    app.include_router(
+        create_story_event_router(
+            repository=repository,
+            load_owned_request=load_owned_request,
+        )
+    )
 
     return app

@@ -1227,6 +1227,12 @@ class StoryEvent(models.Model):
         verbose_name="이벤트 콘텐츠",
     )
 
+    metadata = models.JSONField(
+        default=dict,
+        blank=True,
+        verbose_name="런타임 승인 메타데이터",
+    )
+
     def clean(self):
         """JSON 객체 구조와 챕터 식별자의 일관성을 검증합니다."""
         super().clean()
@@ -1238,7 +1244,10 @@ class StoryEvent(models.Model):
 
         if not isinstance(self.payload, dict):
             errors["payload"] = "이벤트 콘텐츠는 JSON 객체여야 합니다."
-
+        if not isinstance(self.metadata, dict):
+            errors["metadata"] = (
+                "이벤트 메타데이터는 JSON 객체여야 합니다."
+            )
         if self.chapter_id and self.event_key:
             chapter_code = (
                 Chapter.objects.filter(pk=self.chapter_id)
@@ -1252,6 +1261,7 @@ class StoryEvent(models.Model):
                 errors["event_key"] = (
                     "이벤트 키의 챕터 코드가 소속 챕터와 일치해야 합니다."
                 )
+
 
         if errors:
             raise ValidationError(errors)

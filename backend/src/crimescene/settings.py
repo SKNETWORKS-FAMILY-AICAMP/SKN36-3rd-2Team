@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import SecretStr
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parents[2]
@@ -37,6 +37,17 @@ class Settings(BaseSettings):
     neo4j_password: SecretStr = SecretStr("")
 
     crimescene_case001_root: Path = Path(".local/case001_v7_1")
+
+    # Django 콘텐츠 서비스
+    django_content_base_url: str = "http://127.0.0.1:8001"
+    django_content_service_token: SecretStr = SecretStr("")
+    django_content_timeout_seconds: float = Field(
+        default=3.0,
+        gt=0,
+        le=30,
+    )
+    django_content_enabled: bool = False
+    django_evidence_gate_enabled: bool = False
 
 
 settings = Settings()

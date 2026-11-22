@@ -1,6 +1,8 @@
 
 """Django 콘텐츠 관리 API."""
+import re
 
+from .models import StoryEvent
 from django.shortcuts import get_object_or_404
 
 from rest_framework.authentication import SessionAuthentication
@@ -11,7 +13,7 @@ from rest_framework.views import APIView
 from .permissions import HasContentServiceToken
 
 from .access_policy import is_runtime_approved
-from .models import Evidence, NPCCard, Objective, Scene
+from .models import Character, Evidence, NPCCard, Objective, Scene
 
 from .models import Case, Chapter
 from .serializers import (
@@ -204,4 +206,113 @@ class InternalEvidenceRequirementsView(APIView):
             "evidence_id": evidence.evidence_id,
             "prerequisites": prerequisite_ids,
             "player_unlock_verification_required": True,
+        })
+
+class InternalApprovedNPCCardsView(APIView):
+    """인증된 게임 엔진 전용 NPC 승인 카드 조회."""
+
+    authentication_classes = []
+    permission_classes = [HasContentServiceToken]
+    http_method_names = ["get", "head", "options"]
+
+    def get(self, request, case_id: str, character_id: str):
+        character = get_object_or_404(
+            Character.objects.select_related("case"),
+            case__case_id=case_id,
+            character_id=character_id,
+        )
+
+        # 게시되지 않은 사건은 NPC 카드 조회를 차단합니다.
+        if character.case.status != Case.Status.PUBLISHED:
+            raise Http404
+
+        cards = [
+            {
+                "card_id": card.card_id,
+                "card_type": card.card_type,
+                "content": card.content,
+            }
+            for card in NPCCard.objects.filter(
+                character=character
+            ).order_by("card_id").iterator(chunk_size=200)
+            if is_runtime_approved(card)
+        ]
+
+        # 메타데이터와 공개 정책 원문은 반환하지 않습니다.
+        return Response({
+            "character_id": character.character_id,
+            "cards": cards,
+        })
+
+
+class InternalApprovedStoryEventView(APIView):
+    """FastAPI 전용 승인된 증거 획득 스토리 이벤트 조회."""
+
+    authentication_classes = []
+    permission_classes = [HasContentServiceToken]
+    http_method_names = ["get", "head", "options"]
+
+    def get(self, request, case_id: str, event_key: str):
+        event = get_object_or_404(
+            StoryEvent.objects.select_related("chapter__case"),
+            chapter__case__case_id=case_id,
+            event_key=event_key,
+        )
+
+        if event.chapter.case.status != Case.Status.PUBLISHED:
+            raise Http404
+
+        if not is_runtime_approved(event):
+            raise Http404
+
+        # 아직 계약이 없는 이벤트 유형은 런타임에서 차단합니다.
+        if event.trigger_type != StoryEvent.TriggerType.EVIDENCE_COLLECTED:
+            raise Http404
+
+        conditions = event.conditions
+        payload = event.payload
+
+        # 지원하는 조건 외의 JSON 필드는 해석하지 않고 차단합니다.
+        if set(conditions) != {"requiredEvidenceIds"}:
+            raise Http404
+
+        evidence_ids = conditions["requiredEvidenceIds"]
+
+        if (
+            not isinstance(evidence_ids, list)
+            or not 1 <= len(evidence_ids) <= 30
+            or any(
+                not isinstance(item, str)
+                or re.fullmatch(
+                    r"E(?:0[1-9]|[12][0-9]|30)",
+                    item,
+                ) is None
+                for item in evidence_ids
+            )
+            or len(evidence_ids) != len(set(evidence_ids))
+        ):
+            raise Http404
+
+        # 출력 콘텐츠는 허용된 필드만 반환합니다.
+        if set(payload) - {"title", "text"}:
+            raise Http404
+
+        title = payload.get("title")
+        text = payload.get("text", "")
+
+        if (
+            not isinstance(title, str)
+            or not 1 <= len(title.strip()) <= 120
+            or not isinstance(text, str)
+            or len(text) > 5000
+        ):
+            raise Http404
+
+        return Response({
+            "event_key": event.event_key,
+            "chapter": event.chapter.code,
+            "trigger_type": event.trigger_type,
+            "required_evidence_ids": evidence_ids,
+            "title": title,
+            "text": text,
         })

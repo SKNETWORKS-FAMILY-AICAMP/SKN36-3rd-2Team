@@ -15,6 +15,22 @@ from fastapi.responses import FileResponse
 from neo4j.exceptions import Neo4jError, ServiceUnavailable, SessionExpired
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from crimescene.agents.contracts import (
+    AgentContext,
+    AgentRequest,
+    AgentType,
+)
+from crimescene.agents.npc_agent import (
+    NPCAgent,
+    NPCAgentResult,
+    NPCDisplayError,
+    NPCEvidenceReactionError,
+)
+from crimescene.agents.orchestrator import (
+    AgentExecutionTimeout,
+    AgentOrchestrator,
+)
+from crimescene.agents.registry import AgentRegistry
 from crimescene.api.django_content_client import (
     ContentServiceError,
     ContentServiceNotFoundError,
@@ -24,7 +40,6 @@ from crimescene.chat.llm_client import LLMProviderError
 from crimescene.chat.npc_history_display import render_stored_npc_message
 from crimescene.chat.npc_persona import EXPECTED_CHARACTER_IDS
 from crimescene.chat.npc_rag_service import NPCRAGResources
-from crimescene.chat.npc_session import MAX_MESSAGE_LENGTH
 from crimescene.retriever.graph_search import (
     is_relation_visible,
     search_character_relations,
@@ -45,12 +60,7 @@ from crimescene.scenario.game_progress import (
 from crimescene.scenario.loaders.unlock_graph_loader import Case001UnlockRules
 from crimescene.scenario.schemas.access_policy import AccessPolicy
 from crimescene.scenario.schemas.game_state import GamePhase, GameState
-from crimescene.trigger.atomic_dialogue import (
-    SQLiteCase001Repository,
-    run_case001_npc_dialogue_atomic,
-)
-from crimescene.trigger.case001_dialogue import build_case001_recipients
-from crimescene.trigger.evidence_reaction import resolve_evidence_reaction
+from crimescene.trigger.atomic_dialogue import SQLiteCase001Repository
 from crimescene.trigger.npc_trigger import NPCTriggerRule
 
 # ============================================================
@@ -960,43 +970,52 @@ def create_app(
                 detail="NPC 대화 엔진이 준비되지 않았습니다.",
             )
 
-        # ISSUE65_EVIDENCE_REACTION_V1
-        # A collected evidence item can be shown to any unlocked NPC.
-        # Only explicitly authorized pairs may create presentation triggers.
-        question = body.question
-        permitted_evidence_id = body.presentedEvidenceId
-        if permitted_evidence_id is not None:
-            recipients = build_case001_recipients(
-                policies=dict(live_policies),
-                npc_cards=live_resources.npc_cards,
-                evidence_rules=live_resources.evidence_rules,
-            )
-            try:
-                question, permitted_evidence_id = resolve_evidence_reaction(
-                    question,
-                    permitted_evidence_id,
-                    active_npc=selection[0],
-                    rules=live_resources.evidence_rules,
-                    authorized_recipients=recipients,
-                    max_length=MAX_MESSAGE_LENGTH,
-                )
-            except ValueError:
-                raise HTTPException(
-                    status_code=422,
-                    detail="증거 데이터가 올바르지 않습니다.",
-                ) from None
+        # 인증된 GameState를 기준으로 현재 NPC Agent만 실행합니다.
+        # 증거 반응 처리는 Adapter가 한 번만 수행합니다.
+        context = AgentContext.from_game_state(
+            state,
+            active_character_id=selection[0],
+        )
+        agent_request = AgentRequest(
+            agent_type=AgentType.NPC,
+            message=body.question,
+            presented_evidence_id=body.presentedEvidenceId,
+        )
+        npc_agent = NPCAgent(
+            repository=repository,
+            resources=live_resources,
+            policies=live_policies,
+            trigger_rules=live_triggers,
+            flag_config=live_flags,
+        )
+        orchestrator = AgentOrchestrator(
+            AgentRegistry([npc_agent]),
+            load_state=repository.load_state,
+            load_selection=repository.load_selection,
+        )
 
         try:
-            result = run_case001_npc_dialogue_atomic(
-                question,
-                session_id=session_id,
-                repository=repository,
-                resources=live_resources,
-                policies=dict(live_policies),
-                trigger_rules=live_triggers,
-                presented_evidence_id=permitted_evidence_id,
-                flag_config=live_flags,
+            agent_result = orchestrator.execute(
+                agent_request,
+                context=context,
             )
+            if not isinstance(agent_result, NPCAgentResult):
+                raise TypeError("NPC Agent 결과 타입이 올바르지 않습니다.")
+
+            # 기존 ChatResponse와 이벤트 생성 코드를 그대로 사용합니다.
+            result = agent_result.dialogue
+
+        except NPCEvidenceReactionError:
+            raise HTTPException(
+                status_code=422,
+                detail="증거 데이터가 올바르지 않습니다.",
+            ) from None
+
+        except NPCDisplayError:
+            raise HTTPException(
+                status_code=502,
+                detail="NPC 응답 형식이 올바르지 않습니다.",
+            ) from None
 
         except PermissionError:
             raise HTTPException(
@@ -1005,9 +1024,27 @@ def create_app(
             ) from None
 
         except LLMProviderError as exc:
-            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from None
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail=str(exc),
+            ) from None
+
+        except AgentExecutionTimeout:
+            raise HTTPException(
+                status_code=504,
+                detail="NPC 대화 처리 시간이 초과됐습니다.",
+            ) from None
 
         except ValueError:
+            raise HTTPException(
+                status_code=409,
+                detail="대화 처리 중 게임 상태가 변경되었습니다.",
+            ) from None
+
+        except RuntimeError as exc:
+            # 실행 직전 상태 경쟁은 기존 API의 409 충돌 응답을 유지합니다.
+            if str(exc) != "게임 상태 스냅샷이 최신 상태와 다릅니다.":
+                raise
             raise HTTPException(
                 status_code=409,
                 detail="대화 처리 중 게임 상태가 변경되었습니다.",

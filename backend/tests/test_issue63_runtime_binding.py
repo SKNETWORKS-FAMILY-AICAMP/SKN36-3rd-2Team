@@ -1,10 +1,13 @@
 """Issue #63 - API 런타임 DI와 실제 SQLite 커밋 경로 검증."""
 
+from unittest.mock import Mock
+
 from fastapi.testclient import TestClient
 
-import crimescene.api.app as api_module
+import crimescene.agents.npc_agent as npc_agent_module
 from crimescene.api.app import create_app
 from crimescene.chat.npc_chat_runtime import NPCChatTurn
+from crimescene.chat.npc_rag_service import NPCRAGResources
 from crimescene.chat.npc_session import NPCExchange
 from crimescene.retriever.npc_output_guard import NPCGroundedReply
 from crimescene.retriever.npc_response_gate import FALLBACK_REPLY
@@ -16,7 +19,9 @@ def test_app_state_resources_are_used_for_chat(tmp_path, monkeypatch):
     repository = SQLiteCase001Repository(tmp_path / "game.sqlite3")
     app = create_app(repository, session_secret="test-secret-" + "a" * 32)
 
-    dummy_resources = object()
+    dummy_resources = Mock(spec=NPCRAGResources)
+    dummy_resources.npc_cards = []
+    dummy_resources.evidence_rules = {}
     app.state.dialogue_resources = dummy_resources
     app.state.dialogue_policies = {}
     app.state.dialogue_triggers = ()
@@ -62,8 +67,11 @@ def test_app_state_resources_are_used_for_chat(tmp_path, monkeypatch):
             disclosed_card_ids=(),
         )
 
-    monkeypatch.setattr(api_module, "run_case001_npc_dialogue_atomic", fake_atomic)
-
+    monkeypatch.setattr(
+        npc_agent_module,
+        "run_case001_npc_dialogue_atomic",
+        fake_atomic,
+    )
     with TestClient(app) as client:
         created = client.post("/api/games")
         assert created.status_code == 201

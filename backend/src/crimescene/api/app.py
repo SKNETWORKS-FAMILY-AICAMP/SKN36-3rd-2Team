@@ -12,6 +12,7 @@ from pathlib import Path
 from fastapi import Cookie, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from mcp.server import MCPServer
 from neo4j.exceptions import Neo4jError, ServiceUnavailable, SessionExpired
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -40,6 +41,8 @@ from crimescene.chat.llm_client import LLMProviderError
 from crimescene.chat.npc_history_display import render_stored_npc_message
 from crimescene.chat.npc_persona import EXPECTED_CHARACTER_IDS
 from crimescene.chat.npc_rag_service import NPCRAGResources
+from crimescene.mcp.context import BoundMCPContext
+from crimescene.mcp.server import create_readonly_mcp_server
 from crimescene.retriever.graph_search import (
     is_relation_visible,
     search_character_relations,
@@ -429,6 +432,91 @@ def create_app(
             session_id,
             scoped_cookie or legacy_cookie,
         )
+
+    def create_owner_scoped_mcp_server(
+        session_id: str,
+        request: Request,
+        legacy_cookie: str | None = None,
+    ) -> MCPServer:
+        """FastAPI 인증을 통과한 세션 전용 MCP Server를 생성합니다."""
+
+        if request.app is not app:
+            raise HTTPException(
+                status_code=403,
+                detail="허용되지 않은 애플리케이션 요청입니다.",
+            )
+
+        # 1. 반드시 기존 HMAC 쿠키 인증을 먼저 수행합니다.
+        state = load_owned_request(
+            session_id,
+            request,
+            legacy_cookie,
+        )
+
+        # 2. 현재 NPC 선택과 게임 revision을 검증합니다.
+        selection = repository.load_selection(state.session_id)
+
+        if (
+            selection is None
+            or selection[1] != state.revision
+            or selection[0] not in state.unlocked_characters
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="NPC 선택 상태가 일치하지 않습니다.",
+            )
+
+        # 3. 서버에서 로딩한 리소스만 사용합니다.
+        resources = getattr(
+            app.state,
+            "dialogue_resources",
+            dialogue_resources,
+        )
+        django_client = getattr(
+            app.state,
+            "django_content_client",
+            None,
+        )
+
+        if not isinstance(resources, NPCRAGResources):
+            raise HTTPException(
+                status_code=503,
+                detail="RAG 서비스가 준비되지 않았습니다.",
+            )
+
+        if not resources.evidence_rules:
+            raise HTTPException(
+                status_code=503,
+                detail="증거 규칙이 준비되지 않았습니다.",
+            )
+
+        if not isinstance(django_client, DjangoContentClient):
+            raise HTTPException(
+                status_code=503,
+                detail="콘텐츠 승인 서비스를 사용할 수 없습니다.",
+            )
+
+        # 4. 인증 완료 후 서버 관리 컨텍스트를 생성합니다.
+        context = BoundMCPContext.from_owned_game_state(
+            state=state,
+            load_state=repository.load_state,
+            active_character_id=selection[0],
+        )
+
+        # 5. 사용자 세션마다 독립된 MCP Server를 생성합니다.
+        return create_readonly_mcp_server(
+            context=context,
+            evidence_rules=resources.evidence_rules,
+            npc_cards=resources.npc_cards,
+            evaluator=resources.evaluator,
+            django_client=django_client,
+            rag_resources=resources,
+        )
+
+    # 외부 HTTP 경로를 등록하지 않고 앱 내부에서만 사용합니다.
+    app.state.create_owner_scoped_mcp_server = (
+        create_owner_scoped_mcp_server
+    )
 
     # --------------------------------------------------------
     # 6. 공통 게임 응답 생성

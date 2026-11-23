@@ -6,6 +6,7 @@ dependencies = [
     "fastapi>=0.115,<1",
     "httpx>=0.28.1,<1",
     "kiwipiepy>=0.24.1",
+    "mcp>=2.2,<3",
     "neo4j>=6.4.1",
     "ollama>=0.6.3",
     "openai>=3.46.0",

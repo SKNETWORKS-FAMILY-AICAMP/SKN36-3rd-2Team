@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from crimescene.api.app import create_app
 from crimescene.api.django_content_client import DjangoContentClient
+from crimescene.scenario.schemas.game_state import GameState
 from crimescene.trigger.atomic_dialogue import SQLiteCase001Repository
 
 TOKEN = "test-content-token-" + "A" * 48
@@ -74,7 +75,6 @@ def test_published_content_returns_200(game_app):
         "title": "테스트 사건",
         "chapters": [
             {"code": "CH00", "order": 0, "title": "프롤로그"},
-            {"code": "CH01", "order": 1, "title": "첫 번째 챕터"},
         ],
     }
 
@@ -205,3 +205,101 @@ def test_unknown_game_session_returns_404(game_app):
         response = client.get(content_url("unknown-session"))
 
     assert response.status_code == 404
+
+
+@pytest.mark.parametrize(
+    "chapter",
+    ["CH00", "CH01", "CH02", "CH03", "CH04"],
+)
+def test_overview_only_returns_unlocked_chapters(
+    game_app,
+    chapter,
+):
+    app, repository = game_app
+
+    all_chapters = [
+        {
+            "code": f"CH0{i}",
+            "order": i,
+            "title": f"Chapter {i}",
+        }
+        for i in range(5)
+    ]
+
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={
+                **OVERVIEW,
+                "chapters": all_chapters,
+            },
+        )
+
+    with attach_django(app, handler), TestClient(app) as client:
+        session_id = create_game(client)
+
+        response = client.post(
+            f"/api/games/{session_id}/prologue/complete"
+        )
+        assert response.status_code == 200
+
+        current = repository.load_state(session_id)
+        unlocked = [
+            f"CH0{i}"
+            for i in range(int(chapter[-1]) + 1)
+        ]
+
+        updated = GameState.model_validate(
+            {
+                **current.model_dump(mode="python"),
+                "current_chapter": chapter,
+                "unlocked_chapters": unlocked,
+                "revision": current.revision + 1,
+            }
+        )
+
+        repository.commit_state(
+            expected_state=current,
+            updated_state=updated,
+        )
+
+        response = client.get(content_url(session_id))
+
+    assert response.status_code == 200
+
+    returned = response.json()["chapters"]
+
+    assert [item["code"] for item in returned] == unlocked
+
+    for item in all_chapters:
+        if item["code"] not in unlocked:
+            assert item["title"] not in response.text
+
+    assert repository.load_state(session_id) == updated
+
+
+def test_overview_rejects_concurrent_state_change(game_app):
+    app, repository = game_app
+
+    def handler(request):
+        current = repository.load_state(session_id)
+        updated = GameState.model_validate(
+            {
+                **current.model_dump(mode="python"),
+                "revision": current.revision + 1,
+            }
+        )
+
+        repository.commit_state(
+            expected_state=current,
+            updated_state=updated,
+        )
+
+        return httpx.Response(200, json=OVERVIEW)
+
+    with attach_django(app, handler), TestClient(app) as client:
+        session_id = create_game(client)
+        response = client.get(content_url(session_id))
+
+    assert response.status_code == 409
+    assert "chapters" not in response.json()

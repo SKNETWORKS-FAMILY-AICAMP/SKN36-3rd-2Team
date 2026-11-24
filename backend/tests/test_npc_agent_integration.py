@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import crimescene.trigger.atomic_dialogue as atomic_module
+from crimescene.agents.contracts import AgentContext
 from crimescene.api.app import create_app
 from crimescene.api.django_content_client import (
     ApprovedStoryEvent,
@@ -23,6 +24,7 @@ from crimescene.retriever.npc_response_gate import FALLBACK_REPLY
 from crimescene.scenario.policy_evaluator import PolicyEvaluator
 from crimescene.scenario.schemas.access_policy import AccessPolicy
 from crimescene.scenario.schemas.game_state import GameState
+from crimescene.scenario.story_context import StoryContextService
 from crimescene.trigger.atomic_dialogue import SQLiteCase001Repository
 from crimescene.trigger.case001_dialogue import Case001DialogueResult
 from crimescene.trigger.npc_trigger import (
@@ -505,3 +507,258 @@ def test_npc_event_sqlite_failure_rolls_back(
         "C01",
         before.revision,
     )
+
+
+def test_day5_npc_story_context_lifecycle(
+    story_event_runtime,
+):
+    client, repository, session_id, django_client = (
+        story_event_runtime
+    )
+
+    service = StoryContextService(repository)
+    bindings = client.app.state.story_event_bindings
+    base = f"/api/games/{session_id}"
+
+    def fetch_approved(event_key):
+        return django_client.get_approved_story_event(
+            "CASE-001",
+            event_key,
+        )
+
+    def load_pending(state):
+        return service.load_pending_event_keys(
+            session_id,
+            expected_revision=state.revision,
+            bindings=bindings,
+            fetch_approved_event=fetch_approved,
+        )
+
+    # 1. NPC 조사 이전 상태
+    before = repository.load_state(session_id)
+
+    context_before = service.load(
+        session_id,
+        expected_revision=before.revision,
+    )
+
+    assert TRIGGER_FLAG not in context_before.flags
+    assert context_before.collected_evidence_ids == ("E01",)
+    assert load_pending(before) == ()
+
+    # 2. 실제 NPC API를 통해 Trigger 실행
+    response = client.post(
+        f"{base}/chat",
+        json={"question": "verified action"},
+    )
+
+    assert response.status_code == 200, response.text
+
+    after_chat = repository.load_state(session_id)
+
+    # 3. Story Context에 변경된 상태 반영
+    context_after = service.load(
+        session_id,
+        expected_revision=after_chat.revision,
+    )
+
+    assert TRIGGER_FLAG in context_after.flags
+    assert context_after.revision == before.revision + 1
+    assert context_after.current_chapter == "CH00"
+
+    # 이전 revision으로는 맥락을 조회할 수 없습니다.
+    with pytest.raises(ValueError, match="revision"):
+        service.load(
+            session_id,
+            expected_revision=before.revision,
+        )
+
+    # 4. Agent Context와 Story Context 정합성
+    agent_context = AgentContext.from_game_state(
+        after_chat,
+        active_character_id="C01",
+    )
+
+    assert agent_context.revision == context_after.revision
+    assert (
+        agent_context.current_chapter
+        == context_after.current_chapter
+    )
+    assert (
+        agent_context.collected_evidence_ids
+        == context_after.collected_evidence_ids
+    )
+
+    # 5. Story Context와 HTTP Pending API의 결과 일치
+    keys = load_pending(after_chat)
+
+    pending = client.get(
+        f"{base}/story-events/pending"
+    )
+
+    assert pending.status_code == 200
+
+    http_keys = tuple(
+        item["eventKey"]
+        for item in pending.json()["items"]
+    )
+
+    assert keys == http_keys == (EVENT_KEY,)
+
+    # 조회만 수행했으므로 상태는 변경되지 않습니다.
+    assert repository.load_state(session_id) == after_chat
+
+    # 6. 이벤트 확인
+    ack = client.post(
+        f"{base}/story-events/{EVENT_KEY}/ack"
+    )
+
+    assert ack.status_code == 200
+    assert ack.json()["created"] is True
+
+    after_ack = repository.load_state(session_id)
+
+    assert after_ack.revision == after_chat.revision + 1
+    assert after_ack.acknowledged_story_events == [STORY_ID]
+    assert load_pending(after_ack) == ()
+
+    # 7. 후속 NPC 대화에서도 이벤트가 재등록되지 않습니다.
+    followup = client.post(
+        f"{base}/chat",
+        json={"question": "verified action"},
+    )
+
+    assert followup.status_code == 200, followup.text
+
+    final = repository.load_state(session_id)
+
+    assert final.queued_story_events == [STORY_ID]
+    assert final.acknowledged_story_events == [STORY_ID]
+    assert load_pending(final) == ()
+
+    assert len(
+        repository.load_history(session_id, "C01")
+    ) == 2
+
+    assert repository.load_selection(session_id) == (
+        "C01",
+        final.revision,
+    )
+
+
+def test_day5_story_context_survives_reconnect(
+    story_event_runtime,
+    tmp_path,
+):
+    client, repository, session_id, _ = (
+        story_event_runtime
+    )
+
+    base = f"/api/games/{session_id}"
+
+    response = client.post(
+        f"{base}/chat",
+        json={"question": "verified action"},
+    )
+
+    assert response.status_code == 200
+
+    ack = client.post(
+        f"{base}/story-events/{EVENT_KEY}/ack"
+    )
+
+    assert ack.status_code == 200
+
+    saved = repository.load_state(session_id)
+
+    # 기존 SQLite 파일을 새로운 저장소 인스턴스로 엽니다.
+    reopened = SQLiteCase001Repository(
+        tmp_path / "game.sqlite3"
+    )
+
+    restored = reopened.load_state(session_id)
+
+    assert restored == saved
+
+    context = StoryContextService(reopened).load(
+        session_id,
+        expected_revision=restored.revision,
+    )
+
+    assert TRIGGER_FLAG in context.flags
+    assert context.current_chapter == "CH00"
+    assert context.collected_evidence_ids == ("E01",)
+
+    assert restored.queued_story_events == [STORY_ID]
+    assert restored.acknowledged_story_events == [STORY_ID]
+
+    assert reopened.load_selection(session_id) == (
+        "C01",
+        restored.revision,
+    )
+
+    assert (
+        reopened.load_history(session_id, "C01")
+        == repository.load_history(session_id, "C01")
+    )
+
+    # 기존 세션 재조회 시 확인한 이벤트는 표시되지 않습니다.
+    resumed = client.get(base)
+
+    assert resumed.status_code == 200
+    assert resumed.json()["revision"] == saved.revision
+
+    pending = client.get(
+        f"{base}/story-events/pending"
+    )
+
+    assert pending.status_code == 200
+    assert pending.json() == {"items": []}
+
+
+def test_day5_npc_failure_preserves_story_context(
+    story_event_runtime,
+):
+    client, repository, session_id, django_client = (
+        story_event_runtime
+    )
+
+    service = StoryContextService(repository)
+
+    before = repository.load_state(session_id)
+
+    context_before = service.load(
+        session_id,
+        expected_revision=before.revision,
+    )
+
+    django_client.get_approved_story_event.side_effect = (
+        ContentServiceError("Injected content service failure")
+    )
+
+    response = client.post(
+        f"/api/games/{session_id}/chat",
+        json={"question": "verified action"},
+    )
+
+    assert response.status_code == 503
+
+    after = repository.load_state(session_id)
+
+    context_after = service.load(
+        session_id,
+        expected_revision=after.revision,
+    )
+
+    # 실패한 대화의 Trigger 및 이벤트는 반영되지 않습니다.
+    assert after == before
+    assert context_after == context_before
+    assert TRIGGER_FLAG not in context_after.flags
+
+    assert after.queued_story_events == []
+    assert after.acknowledged_story_events == []
+
+    assert repository.load_history(
+        session_id,
+        "C01",
+    ) == ()

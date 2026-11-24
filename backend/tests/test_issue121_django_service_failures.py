@@ -10,7 +10,6 @@ from crimescene.api.story_event_delivery_gate import StoryEventBinding
 from crimescene.scenario.schemas.game_state import GameState
 from crimescene.trigger.atomic_dialogue import SQLiteCase001Repository
 
-
 EVENT_KEY = "EVT-CH01-901"
 TOKEN = "issue121-service-token-" + "A" * 48
 

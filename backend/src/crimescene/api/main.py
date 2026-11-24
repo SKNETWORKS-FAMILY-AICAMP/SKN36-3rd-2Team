@@ -11,6 +11,9 @@ from crimescene.api.app import create_app
 from crimescene.api.chat_bootstrap import load_chat_runtime
 from crimescene.api.django_content_client import DjangoContentClient
 from crimescene.scenario.loaders.case_truth_loader import load_case001_truth
+from crimescene.scenario.loaders.chapter_rules_loader import (
+    load_chapter_rules,
+)
 from crimescene.settings import settings
 from crimescene.trigger.atomic_dialogue import SQLiteCase001Repository
 
@@ -105,3 +108,19 @@ truth_path = os.getenv("CRIMESCENE_CASE_TRUTH_PATH", "").strip()
 
 if truth_path:
     app.state.case_truth = load_case001_truth(Path(truth_path).expanduser().resolve())
+
+# 서버 전용 챕터 해금 규칙 등록
+chapter_rules_path = os.getenv(
+    "CRIMESCENE_CHAPTER_RULES_PATH",
+    "",
+).strip()
+
+if chapter_rules_path:
+    rules_path = Path(chapter_rules_path).expanduser()
+
+    if not rules_path.is_absolute():
+        rules_path = backend_root / rules_path
+
+    app.state.chapter_unlock_rules = load_chapter_rules(
+        rules_path.resolve()
+    )

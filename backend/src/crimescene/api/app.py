@@ -52,6 +52,11 @@ from crimescene.scenario.accusation_service import (
     submit_accusation_request_atomic,
 )
 from crimescene.scenario.case_truth import CaseTruth
+from crimescene.scenario.chapter_progress import (
+    CHAPTER_ORDER,
+    ChapterUnlockRule,
+    advance_chapter_atomic,
+)
 from crimescene.scenario.document_access import select_authorized_player_documents
 from crimescene.scenario.evidence_collection import get_collection_progress
 from crimescene.scenario.evidence_service import collect_evidence_atomic
@@ -101,6 +106,9 @@ class GameResponse(BaseModel):
     sessionId: str
     phase: GamePhase
 
+    currentChapter: str
+    unlockedChapters: list[str]
+
     activeCharacterId: str
     unlockedCharacters: list[str]
 
@@ -137,6 +145,17 @@ class GameSceneResponse(BaseModel):
     chapter: str
     title: str
     sceneText: str
+
+
+class ChapterAdvanceRequest(BaseModel):
+    """챕터 전환 요청 계약."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        strict=True,
+    )
+
+    expectedRevision: int = Field(ge=0)
 
 
 class ChatRequest(BaseModel):
@@ -580,6 +599,8 @@ def create_app(
             outcome=state.outcome,
             revision=state.revision,
             events=events if events is not None else [],
+            currentChapter=state.current_chapter,
+            unlockedChapters=list(state.unlocked_chapters),
         )
 
     # ========================================================
@@ -671,6 +692,107 @@ def create_app(
         return game_response(state)
 
     # ========================================================
+    # API: 챕터 전환
+    # ========================================================
+
+    @app.post(
+        "/api/games/{session_id}/chapter/advance",
+        response_model=GameResponse,
+    )
+    def advance_game_chapter(
+        session_id: str,
+        payload: ChapterAdvanceRequest,
+        request: Request,
+        case001_owner: str | None = Cookie(default=None),
+    ) -> GameResponse:
+        """서버 해금 규칙에 따라 다음 챕터로 진행합니다."""
+
+        state = load_owned_request(
+            session_id,
+            request,
+            case001_owner,
+        )
+
+        if state.revision != payload.expectedRevision:
+            raise HTTPException(
+                status_code=409,
+                detail="게임 상태가 변경되었습니다.",
+            )
+
+        if (
+            state.phase != GamePhase.INVESTIGATION
+            or state.outcome not in (None, "ONGOING")
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="챕터를 진행할 수 없는 상태입니다.",
+            )
+
+        current_index = CHAPTER_ORDER.index(state.current_chapter)
+
+        if current_index >= len(CHAPTER_ORDER) - 1:
+            raise HTTPException(
+                status_code=409,
+                detail="마지막 챕터입니다.",
+            )
+
+        next_chapter = CHAPTER_ORDER[current_index + 1]
+
+        rules = getattr(
+            request.app.state,
+            "chapter_unlock_rules",
+            None,
+        )
+
+        if not isinstance(rules, Mapping):
+            raise HTTPException(
+                status_code=503,
+                detail="챕터 진행 규칙을 사용할 수 없습니다.",
+            )
+
+        rule = rules.get(next_chapter)
+
+        if (
+            not isinstance(rule, ChapterUnlockRule)
+            or rule.target_chapter != next_chapter
+        ):
+            raise HTTPException(
+                status_code=503,
+                detail="챕터 진행 규칙을 사용할 수 없습니다.",
+            )
+
+        try:
+            updated = advance_chapter_atomic(
+                repository,
+                session_id,
+                rule=rule,
+                expected_revision=payload.expectedRevision,
+            )
+        except PermissionError:
+            raise HTTPException(
+                status_code=409,
+                detail="챕터 진행 조건이 충족되지 않았습니다.",
+            ) from None
+        except ValueError:
+            raise HTTPException(
+                status_code=409,
+                detail="게임 상태가 변경되었습니다.",
+            ) from None
+
+        return game_response(
+            updated,
+            events=[
+                {
+                    "type": "CHAPTER_CHANGED",
+                    "chapter": updated.current_chapter,
+                },
+                {
+                    "type": "GAME_PROGRESS_UPDATED",
+                },
+            ],
+        )
+
+    # ========================================================
     # API: 게시된 사건·챕터 개요 조회 (Django 콘텐츠 연동)
     # ========================================================
 
@@ -713,6 +835,18 @@ def create_app(
                 detail="공개된 콘텐츠를 찾을 수 없습니다.",
             )
 
+        latest = load_owned_request(
+            session_id,
+            request,
+            case001_owner,
+        )
+
+        if latest != state:
+            raise HTTPException(
+                status_code=409,
+                detail="게임 상태가 변경되었습니다.",
+            )
+
         return GameContentOverviewResponse(
             caseId=overview.case.case_id,
             title=overview.case.title,
@@ -723,6 +857,7 @@ def create_app(
                     title=chapter.title,
                 )
                 for chapter in overview.chapters
+                if chapter.code in state.unlocked_chapters
             ],
         )
 
@@ -779,12 +914,27 @@ def create_app(
                 detail="스토리 장면을 조회할 수 없습니다.",
             ) from None
 
-        # 아직 챕터 진행 상태가 없으므로 CH00만 허용합니다.
-        # Django의 PLAYER_VISIBLE 승인만으로 미래 챕터를 해금하지 않습니다.
-        if scene.chapter != "CH00":
+        # 현재 챕터이면서 해금된 장면만 공개합니다.
+        if (
+            scene.chapter != state.current_chapter
+            or scene.chapter not in state.unlocked_chapters
+        ):
             raise HTTPException(
                 status_code=404,
                 detail="스토리 장면을 찾을 수 없습니다.",
+            )
+
+        # Django 조회 중 게임 상태 변경 여부를 검증합니다.
+        latest = load_owned_request(
+            session_id,
+            request,
+            case001_owner,
+        )
+
+        if latest != state:
+            raise HTTPException(
+                status_code=409,
+                detail="게임 상태가 변경되었습니다.",
             )
 
         return GameSceneResponse(

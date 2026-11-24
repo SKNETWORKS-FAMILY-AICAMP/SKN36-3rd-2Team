@@ -148,17 +148,30 @@ def advance_chapter_atomic(
     session_id: str,
     *,
     rule: ChapterUnlockRule | None,
+    expected_revision: int | None = None,
 ) -> GameState:
     """최신 서버 상태를 검사한 후 SQLite에 원자적으로 저장합니다."""
 
     if not isinstance(repository, SQLiteCase001Repository):
         raise TypeError("게임 상태 저장소가 필요합니다.")
 
+    if expected_revision is not None and (
+        type(expected_revision) is not int
+        or expected_revision < 0
+    ):
+        raise ValueError("올바르지 않은 revision입니다.")
+
     current = repository.load_state(session_id)
+
+    if (
+        expected_revision is not None
+        and current.revision != expected_revision
+    ):
+        raise ValueError("GameState revision이 일치하지 않습니다.")
 
     updated = advance_chapter(current, rule=rule)
 
-    # 기존 낙관적 잠금(revision)과 SQLite 트랜잭션을 재사용합니다.
+    # GameState와 NPC 세션 revision을 원자적으로 갱신합니다.
     return repository.commit_state(
         expected_state=current,
         updated_state=updated,

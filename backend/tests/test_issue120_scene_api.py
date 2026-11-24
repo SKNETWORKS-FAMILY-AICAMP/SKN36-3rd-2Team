@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from crimescene.api.app import create_app
 from crimescene.api.django_content_client import DjangoContentClient
+from crimescene.scenario.schemas.game_state import GameState
 from crimescene.trigger.atomic_dialogue import SQLiteCase001Repository
 
 TOKEN = "issue120-scene-token-" + "x" * 48
@@ -267,3 +268,114 @@ def test_django_timeout_returns_503(game_app):
         response = client.get(scene_url(session_id))
 
     assert response.status_code == 503
+
+
+@pytest.mark.parametrize(
+    "chapter",
+    ["CH01", "CH02", "CH03", "CH04"],
+)
+def test_current_unlocked_scene_returns_200(game_app, chapter):
+    """현재 해금된 챕터의 승인 장면을 반환합니다."""
+    app, repository = game_app
+
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={**SCENE, "chapter": chapter},
+        )
+
+    with connect_django(app, handler), TestClient(app) as client:
+        session_id = create_game(client)
+
+        response = client.post(
+            f"/api/games/{session_id}/prologue/complete"
+        )
+        assert response.status_code == 200
+
+        current = repository.load_state(session_id)
+        updated = GameState.model_validate(
+            {
+                **current.model_dump(mode="python"),
+                "current_chapter": chapter,
+                "unlocked_chapters": [
+                    f"CH0{i}"
+                    for i in range(int(chapter[-1]) + 1)
+                ],
+                "revision": current.revision + 1,
+            }
+        )
+
+        repository.commit_state(
+            expected_state=current,
+            updated_state=updated,
+        )
+
+        response = client.get(scene_url(session_id))
+
+    assert response.status_code == 200
+    assert response.json()["chapter"] == chapter
+    assert repository.load_state(session_id) == updated
+
+
+def test_previous_chapter_scene_is_blocked(game_app):
+    """해금됐더라도 현재 챕터가 아닌 장면은 차단합니다."""
+    app, repository = game_app
+
+    def handler(request):
+        return httpx.Response(200, json=SCENE)
+
+    with connect_django(app, handler), TestClient(app) as client:
+        session_id = create_game(client)
+
+        response = client.post(
+            f"/api/games/{session_id}/prologue/complete"
+        )
+        assert response.status_code == 200
+
+        current = repository.load_state(session_id)
+        updated = GameState.model_validate(
+            {
+                **current.model_dump(mode="python"),
+                "current_chapter": "CH01",
+                "unlocked_chapters": ["CH00", "CH01"],
+                "revision": current.revision + 1,
+            }
+        )
+
+        repository.commit_state(
+            expected_state=current,
+            updated_state=updated,
+        )
+
+        response = client.get(scene_url(session_id))
+
+    assert response.status_code == 404
+    assert "sceneText" not in response.json()
+
+
+def test_scene_read_rejects_concurrent_state_change(game_app):
+    """Django 조회 도중 상태 변경 시 장면 반환을 차단합니다."""
+    app, repository = game_app
+
+    def handler(request):
+        current = repository.load_state(session_id)
+        updated = GameState.model_validate(
+            {
+                **current.model_dump(mode="python"),
+                "revision": current.revision + 1,
+            }
+        )
+
+        repository.commit_state(
+            expected_state=current,
+            updated_state=updated,
+        )
+
+        return httpx.Response(200, json=SCENE)
+
+    with connect_django(app, handler), TestClient(app) as client:
+        session_id = create_game(client)
+        response = client.get(scene_url(session_id))
+
+    assert response.status_code == 409
+    assert "sceneText" not in response.json()

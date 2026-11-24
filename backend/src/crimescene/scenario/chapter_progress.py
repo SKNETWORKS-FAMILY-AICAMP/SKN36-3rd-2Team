@@ -1,6 +1,7 @@
 """CASE-001 서버 측 챕터 해금 및 전환 엔진."""
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from crimescene.scenario.schemas.game_state import (
@@ -149,8 +150,9 @@ def advance_chapter_atomic(
     *,
     rule: ChapterUnlockRule | None,
     expected_revision: int | None = None,
+    stage_events: Callable[[GameState], GameState] | None = None,
 ) -> GameState:
-    """최신 서버 상태를 검사한 후 SQLite에 원자적으로 저장합니다."""
+    """챕터 전환과 이벤트 큐를 원자적으로 저장합니다."""
 
     if not isinstance(repository, SQLiteCase001Repository):
         raise TypeError("게임 상태 저장소가 필요합니다.")
@@ -171,7 +173,10 @@ def advance_chapter_atomic(
 
     updated = advance_chapter(current, rule=rule)
 
-    # GameState와 NPC 세션 revision을 원자적으로 갱신합니다.
+    # 새 챕터에서 허용되는 이벤트만 평가합니다.
+    if stage_events is not None:
+        updated = stage_events(updated)
+
     return repository.commit_state(
         expected_state=current,
         updated_state=updated,

@@ -1,6 +1,7 @@
 """CASE-001: NPC 대화와 GameState를 하나의 SQLite 트랜잭션으로 저장한다."""
 
 import json
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
@@ -596,6 +597,7 @@ def run_case001_npc_dialogue_atomic(
     trigger_rules: tuple[NPCTriggerRule, ...],
     presented_evidence_id: str | None = None,
     flag_config: Case001UnlockRules | None = None,
+    stage_events: Callable[[GameState], GameState] | None = None,
 ) -> Case001DialogueResult:
     """DB에서 신뢰 상태를 읽고 NPC 대화와 GameState를 원자적으로 저장한다."""
 
@@ -627,9 +629,16 @@ def run_case001_npc_dialogue_atomic(
     if staged.pending is None or staged.pending != result.turn.exchange:
         raise RuntimeError("검증된 NPC 대화가 임시 저장되지 않았습니다.")
 
+    # 검증된 NPC 대화 결과를 기준으로 이벤트 큐를 평가합니다.
+    updated = result.state
+
+    if stage_events is not None:
+        updated = stage_events(updated)
+
+    # 대화 기록, GameState, 이벤트 큐를 함께 저장합니다.
     committed = repository.commit_turn(
         expected_state=state,
-        updated_state=result.state,
+        updated_state=updated,
         turn=result.turn,
     )
 

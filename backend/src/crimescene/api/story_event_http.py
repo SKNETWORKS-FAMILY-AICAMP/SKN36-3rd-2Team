@@ -111,7 +111,11 @@ def create_story_event_router(
     ) -> PendingStoryEventsResponse:
         """List only approved, queued, unacknowledged events."""
 
-        load_owned_request(session_id, request, case001_owner)
+        state = load_owned_request(
+            session_id,
+            request,
+            case001_owner,
+        )
 
         bindings = getattr(
             request.app.state,
@@ -191,6 +195,18 @@ def create_story_event_router(
                 detail="Game state changed",
             ) from None
 
+        latest = load_owned_request(
+            session_id,
+            request,
+            case001_owner,
+        )
+
+        if latest != state:
+            raise HTTPException(
+                status_code=409,
+                detail="Game state changed",
+            )
+
         return PendingStoryEventsResponse(items=items)
 
     @router.get(
@@ -221,10 +237,17 @@ def create_story_event_router(
                 status_code=404,
                 detail="Event not found",
             ) from None
+
         except ContentServiceError:
             raise HTTPException(
                 status_code=503,
                 detail="Content service unavailable",
+            ) from None
+
+        except ValueError:
+            raise HTTPException(
+                status_code=409,
+                detail="Game state changed",
             ) from None
 
         if event is None:

@@ -14,6 +14,12 @@ from crimescene.scenario.loaders.case_truth_loader import load_case001_truth
 from crimescene.scenario.loaders.chapter_rules_loader import (
     load_chapter_rules,
 )
+from crimescene.scenario.loaders.story_event_bindings_loader import (
+    load_story_event_bindings,
+)
+from crimescene.scenario.loaders.story_event_conditions_loader import (
+    load_story_event_conditions,
+)
 from crimescene.settings import settings
 from crimescene.trigger.atomic_dialogue import SQLiteCase001Repository
 
@@ -123,4 +129,52 @@ if chapter_rules_path:
 
     app.state.chapter_unlock_rules = load_chapter_rules(
         rules_path.resolve()
+    )
+
+
+# 서버 전용 Story Event 바인딩 초기화
+story_bindings_path = os.getenv(
+    "CRIMESCENE_STORY_EVENT_BINDINGS_PATH",
+    "",
+).strip()
+
+if story_bindings_path:
+    bindings_path = Path(
+        story_bindings_path
+    ).expanduser()
+
+    if not bindings_path.is_absolute():
+        bindings_path = backend_root / bindings_path
+
+    app.state.story_event_bindings = (
+        load_story_event_bindings(
+            bindings_path.resolve()
+        )
+    )
+
+# 서버 전용 Story Event 발생 조건 초기화
+story_conditions_path = os.getenv(
+    "CRIMESCENE_STORY_EVENT_CONDITIONS_PATH",
+    "",
+).strip()
+
+# 바인딩과 발생 조건은 함께 설정해야 합니다.
+if bool(story_bindings_path) != bool(story_conditions_path):
+    raise ValueError(
+        "Story Event 바인딩과 발생 조건을 함께 설정해야 합니다."
+    )
+
+if story_conditions_path:
+    conditions_path = Path(
+        story_conditions_path
+    ).expanduser()
+
+    if not conditions_path.is_absolute():
+        conditions_path = backend_root / conditions_path
+
+    app.state.story_event_conditions = (
+        load_story_event_conditions(
+            conditions_path.resolve(),
+            bindings=app.state.story_event_bindings,
+        )
     )

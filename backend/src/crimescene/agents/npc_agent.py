@@ -1,6 +1,6 @@
 """Issue #131 - 기존 NPC 대화 엔진 Agent Adapter."""
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
 from pydantic import Field, SkipValidation
 
@@ -16,6 +16,7 @@ from crimescene.scenario.loaders.unlock_graph_loader import (
     Case001UnlockRules,
 )
 from crimescene.scenario.schemas.access_policy import AccessPolicy
+from crimescene.scenario.schemas.game_state import GameState
 from crimescene.trigger.atomic_dialogue import (
     SQLiteCase001Repository,
     run_case001_npc_dialogue_atomic,
@@ -58,6 +59,7 @@ class NPCAgent:
         policies: Mapping[str, AccessPolicy],
         trigger_rules: tuple[NPCTriggerRule, ...] = (),
         flag_config: Case001UnlockRules | None = None,
+        stage_events: Callable[[GameState], GameState] | None = None,
     ) -> None:
         if not isinstance(repository, SQLiteCase001Repository):
             raise TypeError("SQLiteCase001Repository가 필요합니다.")
@@ -76,6 +78,11 @@ class NPCAgent:
         self._policies = dict(policies)
         self._trigger_rules = trigger_rules
         self._flag_config = flag_config
+
+        if stage_events is not None and not callable(stage_events):
+            raise TypeError("이벤트 평가 함수가 올바르지 않습니다.")
+
+        self._stage_events = stage_events
 
     @property
     def agent_type(self) -> AgentType:
@@ -131,7 +138,13 @@ class NPCAgent:
                     "증거 데이터가 올바르지 않습니다."
                 ) from exc
 
-        # 기존 RAG, 출력 검증, SQLite 원자적 저장 경로 재사용
+        # 기존 대화 엔진 호출과의 호환성을 유지합니다.
+        stage_options = (
+            {"stage_events": self._stage_events}
+            if self._stage_events is not None
+            else {}
+        )
+
         dialogue = run_case001_npc_dialogue_atomic(
             question,
             session_id=context.session_id,
@@ -141,6 +154,7 @@ class NPCAgent:
             trigger_rules=self._trigger_rules,
             presented_evidence_id=evidence_id,
             flag_config=self._flag_config,
+            **stage_options,
         )
 
         if not isinstance(dialogue, Case001DialogueResult):

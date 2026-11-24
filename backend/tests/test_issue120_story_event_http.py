@@ -1,7 +1,11 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from crimescene.api.app import create_app
-from crimescene.api.django_content_client import ApprovedStoryEvent
+from crimescene.api.django_content_client import (
+    ApprovedStoryEvent,
+    ContentServiceNotFoundError,
+)
 from crimescene.api.story_event_delivery_gate import StoryEventBinding
 from crimescene.scenario.schemas.game_state import GameState
 from crimescene.trigger.atomic_dialogue import SQLiteCase001Repository
@@ -222,3 +226,165 @@ def test_pending_list_content_service_failure(tmp_path):
     response = client.get(f"/api/games/{session_id}/story-events/pending")
 
     assert response.status_code == 503
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    ["pending", "detail"],
+)
+def test_concurrent_state_change_blocks_event(
+    tmp_path,
+    monkeypatch,
+    endpoint,
+):
+    client, app, repository, session_id, path = (
+        make_environment(tmp_path)
+    )
+
+    original_fetch = (
+        app.state.django_content_client.get_approved_story_event
+    )
+
+    def concurrent_fetch(case_id, event_key):
+        event = original_fetch(case_id, event_key)
+
+        current = repository.load_state(session_id)
+
+        updated = GameState.model_validate(
+            {
+                **current.model_dump(mode="python"),
+                "current_chapter": "CH02",
+                "unlocked_chapters": [
+                    "CH00",
+                    "CH01",
+                    "CH02",
+                ],
+                "revision": current.revision + 1,
+            }
+        )
+
+        repository.commit_state(
+            expected_state=current,
+            updated_state=updated,
+        )
+
+        return event
+
+    monkeypatch.setattr(
+        app.state.django_content_client,
+        "get_approved_story_event",
+        concurrent_fetch,
+    )
+
+    if endpoint == "pending":
+        path = f"/api/games/{session_id}/story-events/pending"
+
+    response = client.get(path)
+
+    assert response.status_code == 409
+    assert "Test content only." not in response.text
+
+
+def test_revoked_event_is_not_delivered(
+    tmp_path,
+    monkeypatch,
+):
+    client, app, repository, session_id, path = (
+        make_environment(tmp_path)
+    )
+
+    before = repository.load_state(session_id)
+
+    def revoked_fetch(case_id, event_key):
+        raise ContentServiceNotFoundError("Not approved")
+
+    monkeypatch.setattr(
+        app.state.django_content_client,
+        "get_approved_story_event",
+        revoked_fetch,
+    )
+
+    pending = client.get(
+        f"/api/games/{session_id}/story-events/pending"
+    )
+
+    assert pending.status_code == 200
+    assert pending.json() == {"items": []}
+
+    assert client.get(path).status_code == 404
+    assert client.post(path + "/ack").status_code == 404
+
+    assert repository.load_state(session_id) == before
+
+
+def test_ack_revision_and_reopen(tmp_path):
+    client, _, repository, session_id, path = (
+        make_environment(tmp_path)
+    )
+
+    before = repository.load_state(session_id)
+
+    response = client.post(path + "/ack")
+
+    assert response.status_code == 200
+
+    saved = repository.load_state(session_id)
+
+    assert saved.revision == before.revision + 1
+
+    assert repository.load_selection(session_id) == (
+        "C01",
+        saved.revision,
+    )
+
+    reopened = SQLiteCase001Repository(
+        tmp_path / "story_event_http.db"
+    )
+
+    assert reopened.load_state(session_id) == saved
+
+    assert reopened.load_state(
+        session_id
+    ).acknowledged_story_events == ["STORY_020"]
+
+
+def test_previous_chapter_event_is_hidden(tmp_path):
+    client, _, repository, session_id, path = (
+        make_environment(tmp_path)
+    )
+
+    current = repository.load_state(session_id)
+
+    updated = GameState.model_validate(
+        {
+            **current.model_dump(mode="python"),
+            "current_chapter": "CH02",
+            "unlocked_chapters": [
+                "CH00",
+                "CH01",
+                "CH02",
+            ],
+            "revision": current.revision + 1,
+        }
+    )
+
+    repository.commit_state(
+        expected_state=current,
+        updated_state=updated,
+    )
+
+    pending = client.get(
+        f"/api/games/{session_id}/story-events/pending"
+    )
+
+    assert pending.status_code == 200
+    assert pending.json() == {"items": []}
+
+    assert client.get(path).status_code == 404
+    assert client.post(path + "/ack").status_code == 404
+
+    # 미확인 이벤트를 임의로 ACK 처리하지 않습니다.
+    saved = repository.load_state(session_id)
+
+    assert saved.queued_story_events == ["STORY_020"]
+    assert saved.acknowledged_story_events == []

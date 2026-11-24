@@ -67,7 +67,19 @@ def get_pending_story_event(
 
     state = repository.load_state(session_id)
 
-    return _select_pending(state, binding, fetch_approved_event)
+    event = _select_pending(
+        state,
+        binding,
+        fetch_approved_event,
+    )
+
+    # 외부 콘텐츠 조회 중 게임 상태가 변경됐는지 확인합니다.
+    latest = repository.load_state(session_id)
+
+    if latest != state:
+        raise ValueError("GameState revision이 일치하지 않습니다.")
+
+    return event
 
 
 def acknowledge_story_event_atomic(

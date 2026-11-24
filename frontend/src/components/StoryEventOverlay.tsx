@@ -10,6 +10,7 @@ import styles from './StoryEventOverlay.module.css'
 
 interface EventQueue {
   sessionId: string
+  revision: number | undefined
   items: PendingStoryEvent[]
 }
 
@@ -30,6 +31,7 @@ export default function StoryEventOverlay() {
     sessionId: '',
     eventKeys: [],
   })
+
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [retry, setRetry] = useState(0)
@@ -37,7 +39,7 @@ export default function StoryEventOverlay() {
   const busyRef = useRef(false)
   const dialogRef = useRef<HTMLDivElement>(null)
 
-  // 메인·프롤로그·엔딩 화면에서는 사건 이벤트를 띄우지 않습니다.
+  // 조사 단계에서만 스토리 이벤트를 표시합니다.
   const enabled =
     Boolean(sessionId) &&
     phase === 'INVESTIGATION' &&
@@ -45,6 +47,7 @@ export default function StoryEventOverlay() {
     pathname !== '/story' &&
     pathname !== '/final'
 
+  // 세션 및 revision 변경 시 승인된 이벤트를 다시 조회합니다.
   useEffect(() => {
     if (!enabled || !sessionId) {
       setQueue(null)
@@ -54,14 +57,42 @@ export default function StoryEventOverlay() {
 
     let cancelled = false
 
+    setQueue(null)
+    setError(null)
+
     getPendingStoryEvents(sessionId)
       .then((items) => {
         if (cancelled) return
-        setQueue({ sessionId, items })
+
+        const latest = useGameStore.getState().session
+
+        // 이전 세션 또는 revision의 응답은 폐기합니다.
+        if (
+          latest?.sessionId !== sessionId ||
+          latest?.revision !== revision
+        ) {
+          return
+        }
+
+        setQueue({
+          sessionId,
+          revision,
+          items,
+        })
         setError(null)
       })
       .catch(() => {
         if (cancelled) return
+
+        const latest = useGameStore.getState().session
+
+        if (
+          latest?.sessionId !== sessionId ||
+          latest?.revision !== revision
+        ) {
+          return
+        }
+
         setQueue(null)
         setError('사건 기록을 불러오지 못했습니다.')
       })
@@ -71,11 +102,18 @@ export default function StoryEventOverlay() {
     }
   }, [enabled, sessionId, revision, pathname, retry])
 
+  // 현재 세션 및 revision과 일치하는 이벤트만 표시합니다.
   const items =
-    queue && queue.sessionId === sessionId ? queue.items : []
+    queue &&
+    queue.sessionId === sessionId &&
+    queue.revision === revision
+      ? queue.items
+      : []
 
   const deferredKeys =
-    deferred.sessionId === sessionId ? deferred.eventKeys : []
+    deferred.sessionId === sessionId
+      ? deferred.eventKeys
+      : []
 
   const current = enabled
     ? items.find((item) => !deferredKeys.includes(item.eventKey))
@@ -89,77 +127,143 @@ export default function StoryEventOverlay() {
     const previousOverflow = document.body.style.overflow
 
     document.body.style.overflow = 'hidden'
+
     dialogRef.current
       ?.querySelector<HTMLButtonElement>('[data-primary]')
       ?.focus()
 
     return () => {
       document.body.style.overflow = previousOverflow
+
       if (previousFocus instanceof HTMLElement) {
         previousFocus.focus()
       }
     }
-  }, [current?.eventKey])
+  }, [current?.eventKey, sessionId])
 
+  // 나중에 보기는 서버 ACK를 생성하지 않습니다.
   const defer = () => {
     if (!sessionId || !current || busyRef.current) return
 
-    setDeferred((previous) => ({
-      sessionId,
-      eventKeys: [
-        ...(previous.sessionId === sessionId
+    setDeferred((previous) => {
+      const previousKeys =
+        previous.sessionId === sessionId
           ? previous.eventKeys
-          : []),
-        current.eventKey,
-      ],
-    }))
+          : []
+
+      return {
+        sessionId,
+        eventKeys: [
+          ...new Set([
+            ...previousKeys,
+            current.eventKey,
+          ]),
+        ],
+      }
+    })
+
     setError(null)
   }
 
+  // 현재 이벤트 확인 및 서버 상태 동기화
   const acknowledge = async () => {
     if (!sessionId || !current || busyRef.current) return
 
     const activeSession = sessionId
+    const activeRevision = revision
     const eventKey = current.eventKey
+
+    const latest = useGameStore.getState().session
+
+    if (
+      latest?.sessionId !== activeSession ||
+      latest?.revision !== activeRevision
+    ) {
+      setQueue(null)
+      setRetry((value) => value + 1)
+      return
+    }
 
     busyRef.current = true
     setBusy(true)
     setError(null)
 
     try {
-      await acknowledgeStoryEvent(activeSession, eventKey)
+      await acknowledgeStoryEvent(
+        activeSession,
+        eventKey,
+      )
 
-      // 다른 게임으로 이동한 사이의 응답을 새 세션에 적용하지 않습니다.
+      // 다른 게임으로 이동했다면 이전 응답을 적용하지 않습니다.
       if (
-        useGameStore.getState().session?.sessionId !== activeSession
+        useGameStore.getState().session?.sessionId !==
+        activeSession
       ) {
         return
       }
 
-      setQueue((previous) => {
-        if (!previous || previous.sessionId !== activeSession) {
-          return previous
-        }
+      // ACK 이후 기존 이벤트 목록은 무효화합니다.
+      setQueue(null)
 
-        return {
-          sessionId: activeSession,
-          items: previous.items.filter(
-            (item) => item.eventKey !== eventKey,
-          ),
-        }
-      })
-
-      // ACK로 서버 revision이 증가했으므로 게임 상태를 동기화합니다.
       try {
         await useGameStore.getState().refresh()
+
+        if (
+          useGameStore.getState().session?.sessionId ===
+          activeSession
+        ) {
+          setRetry((value) => value + 1)
+        }
       } catch {
-        setError('기록 확인은 저장됐지만 진행 상태 갱신에 실패했습니다.')
+        if (
+          useGameStore.getState().session?.sessionId ===
+          activeSession
+        ) {
+          setError(
+            '기록 확인은 저장됐지만 진행 상태 갱신에 실패했습니다.',
+          )
+        }
       }
     } catch {
       if (
-        useGameStore.getState().session?.sessionId === activeSession
+        useGameStore.getState().session?.sessionId ===
+        activeSession
       ) {
-        setError('기록 확인에 실패했습니다. 다시 시도해 주세요.')
+        setError(
+          '기록 확인에 실패했습니다. 다시 시도해 주세요.',
+        )
+      }
+    } finally {
+      busyRef.current = false
+      setBusy(false)
+    }
+  }
+
+  // 조회 오류 또는 상태 갱신 실패 시 최신 상태부터 복구합니다.
+  const retryPending = async () => {
+    if (!sessionId || busyRef.current) return
+
+    const activeSession = sessionId
+
+    busyRef.current = true
+    setBusy(true)
+    setError(null)
+
+    try {
+      await useGameStore.getState().refresh()
+
+      if (
+        useGameStore.getState().session?.sessionId ===
+        activeSession
+      ) {
+        setRetry((value) => value + 1)
+      }
+    } catch {
+      if (
+        useGameStore.getState().session?.sessionId ===
+        activeSession
+      ) {
+        setError('진행 상태를 불러오지 못했습니다.')
       }
     } finally {
       busyRef.current = false
@@ -175,11 +279,13 @@ export default function StoryEventOverlay() {
     return (
       <div className={styles.notice} role="status">
         <span>{error}</span>
+
         <button
           type="button"
-          onClick={() => setRetry((value) => value + 1)}
+          disabled={busy}
+          onClick={() => void retryPending()}
         >
-          다시 확인
+          {busy ? '확인 중…' : '다시 확인'}
         </button>
       </div>
     )
@@ -196,6 +302,7 @@ export default function StoryEventOverlay() {
         aria-describedby="story-event-text"
         onKeyDown={(event) => {
           if (event.key === 'Escape' && !busy) {
+            event.preventDefault()
             defer()
           }
 
@@ -215,7 +322,10 @@ export default function StoryEventOverlay() {
           const first = buttons[0]
           const last = buttons[buttons.length - 1]
 
-          if (event.shiftKey && document.activeElement === first) {
+          if (
+            event.shiftKey &&
+            document.activeElement === first
+          ) {
             event.preventDefault()
             last.focus()
           } else if (
@@ -228,13 +338,23 @@ export default function StoryEventOverlay() {
         }}
       >
         <div className={styles.header}>
-          <span className={styles.caseNo}>CASE 001</span>
-          <span className={styles.chapter}>{current.chapter}</span>
+          <span className={styles.caseNo}>
+            CASE 001
+          </span>
+
+          <span className={styles.chapter}>
+            {current.chapter}
+          </span>
         </div>
 
-        <p className={styles.kicker}>새로운 사건 기록</p>
+        <p className={styles.kicker}>
+          새로운 사건 기록
+        </p>
 
-        <h2 id="story-event-title" className={styles.title}>
+        <h2
+          id="story-event-title"
+          className={styles.title}
+        >
           {current.title}
         </h2>
 
@@ -248,7 +368,10 @@ export default function StoryEventOverlay() {
         </div>
 
         {error && (
-          <p className={styles.error} role="alert">
+          <p
+            className={styles.error}
+            role="alert"
+          >
             {error}
           </p>
         )}

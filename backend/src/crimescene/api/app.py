@@ -37,6 +37,9 @@ from crimescene.api.django_content_client import (
     ContentServiceNotFoundError,
     DjangoContentClient,
 )
+from crimescene.api.story_event_progress import (
+    stage_story_events,
+)
 from crimescene.chat.llm_client import LLMProviderError
 from crimescene.chat.npc_history_display import render_stored_npc_message
 from crimescene.chat.npc_persona import EXPECTED_CHARACTER_IDS
@@ -540,6 +543,64 @@ def create_app(
     # --------------------------------------------------------
     # 6. 공통 게임 응답 생성
     # --------------------------------------------------------
+    def stage_game_story_events(
+        state: GameState,
+    ) -> GameState:
+        """서버에서 승인한 이벤트만 저장 예정 상태에 추가합니다."""
+
+        bindings = getattr(
+            app.state,
+            "story_event_bindings",
+            None,
+        )
+
+        conditions = getattr(
+            app.state,
+            "story_event_conditions",
+            None,
+        )
+
+        # 기능이 비활성화된 경우 기존 상태를 유지합니다.
+        if bindings is None and conditions is None:
+            return state
+
+        if (
+            not isinstance(bindings, Mapping)
+            or not isinstance(conditions, Mapping)
+        ):
+            raise ContentServiceError(
+                "Story Event configuration unavailable"
+            )
+
+        def fetch_approved(event_key: str):
+            client = getattr(
+                app.state,
+                "django_content_client",
+                None,
+            )
+
+            if not isinstance(client, DjangoContentClient):
+                raise ContentServiceError(
+                    "Story Event content service unavailable"
+                )
+
+            return client.get_approved_story_event(
+                state.case_id,
+                event_key,
+            )
+
+        try:
+            return stage_story_events(
+                state,
+                bindings=bindings,
+                conditions=conditions,
+                fetch_approved_event=fetch_approved,
+            )
+
+        except (ValueError, TypeError):
+            raise ContentServiceError(
+                "Invalid Story Event configuration"
+            ) from None
 
     def game_response(
         state: GameState,
@@ -767,12 +828,21 @@ def create_app(
                 session_id,
                 rule=rule,
                 expected_revision=payload.expectedRevision,
+                stage_events=stage_game_story_events,
             )
+
+        except ContentServiceError:
+            raise HTTPException(
+                status_code=503,
+                detail="스토리 이벤트 승인 정보를 확인할 수 없습니다.",
+            ) from None
+
         except PermissionError:
             raise HTTPException(
                 status_code=409,
                 detail="챕터 진행 조건이 충족되지 않았습니다.",
             ) from None
+
         except ValueError:
             raise HTTPException(
                 status_code=409,
@@ -1225,6 +1295,7 @@ def create_app(
             policies=live_policies,
             trigger_rules=live_triggers,
             flag_config=live_flags,
+            stage_events=stage_game_story_events,
         )
         orchestrator = AgentOrchestrator(
             AgentRegistry([npc_agent]),
@@ -1242,6 +1313,12 @@ def create_app(
 
             # 기존 ChatResponse와 이벤트 생성 코드를 그대로 사용합니다.
             result = agent_result.dialogue
+
+        except ContentServiceError:
+            raise HTTPException(
+                status_code=503,
+                detail="스토리 이벤트 승인 정보를 확인할 수 없습니다.",
+            ) from None
 
         except NPCEvidenceReactionError:
             raise HTTPException(
@@ -1421,14 +1498,25 @@ def create_app(
                 evaluator=acquisition_evaluator,
                 unlock_rules=flags.npc_rules,
                 django_prerequisites=django_prerequisites,
+                stage_events=stage_game_story_events,
             )
+
+        except ContentServiceError:
+            raise HTTPException(
+                status_code=503,
+                detail="스토리 이벤트 승인 정보를 확인할 수 없습니다.",
+            ) from None
+
         except PermissionError:
             raise HTTPException(
-                status_code=403, detail="증거 수집 조건을 충족하지 않았습니다."
+                status_code=403,
+                detail="증거 수집 조건을 충족하지 않았습니다.",
             ) from None
+
         except ValueError:
             raise HTTPException(
-                status_code=409, detail="증거 수집 중 게임 상태가 변경됐습니다."
+                status_code=409,
+                detail="증거 수집 중 게임 상태가 변경됐습니다.",
             ) from None
 
         events: list[dict[str, str]] = []

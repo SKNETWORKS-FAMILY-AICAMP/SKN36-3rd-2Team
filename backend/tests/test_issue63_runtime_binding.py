@@ -37,6 +37,7 @@ def test_app_state_resources_are_used_for_chat(tmp_path, monkeypatch):
         trigger_rules,
         presented_evidence_id=None,
         flag_config=None,
+        stage_events=None,
     ):
         assert resources is dummy_resources
         assert policies == {}
@@ -56,8 +57,16 @@ def test_app_state_resources_are_used_for_chat(tmp_path, monkeypatch):
             ),
             display_text=FALLBACK_REPLY,
         )
+        updated = state
+
+        if stage_events is not None:
+            assert callable(stage_events)
+            updated = stage_events(state)
+
         committed = repository.commit_turn(
-            expected_state=state, updated_state=state, turn=turn
+            expected_state=state,
+            updated_state=updated,
+            turn=turn,
         )
         return Case001DialogueResult(
             turn=turn,

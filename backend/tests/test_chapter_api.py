@@ -1,9 +1,18 @@
 """Issue #146 - 챕터 전환 API 통합 및 보안 테스트."""
 
+from unittest.mock import Mock
+
 import pytest
 from fastapi.testclient import TestClient
 
 from crimescene.api.app import create_app
+from crimescene.api.django_content_client import (
+    ApprovedStoryEvent,
+    ContentServiceError,
+    DjangoContentClient,
+)
+from crimescene.api.story_event_conditions import StoryEventConditions
+from crimescene.api.story_event_delivery_gate import StoryEventBinding
 from crimescene.scenario.chapter_progress import ChapterUnlockRule
 from crimescene.scenario.schemas.game_state import (
     EvidenceState,
@@ -288,3 +297,167 @@ def test_invalid_revision_is_rejected(runtime, revision):
 
     assert response.status_code == 422
     assert repository.load_state(session_id) == before
+
+
+@pytest.fixture
+def chapter_event_runtime(runtime):
+    app, client, repository, session_id = runtime
+
+    event_key = "EVT-CH01-001"
+    story_id = "STORY_001"
+
+    app.state.story_event_bindings = {
+        event_key: StoryEventBinding(
+            source_story_id=story_id,
+            event_key=event_key,
+            chapter="CH01",
+        )
+    }
+
+    app.state.story_event_conditions = {
+        story_id: StoryEventConditions(
+            story_id=story_id,
+            chapter="CH01",
+            all_evidence=frozenset({"E01"}),
+            required_flags=frozenset({"TEST_READY"}),
+        )
+    }
+
+    django_client = Mock(spec=DjangoContentClient)
+
+    django_client.get_approved_story_event.return_value = (
+        ApprovedStoryEvent(
+            event_key=event_key,
+            chapter="CH01",
+            trigger_type="EVIDENCE_COLLECTED",
+            required_evidence_ids=["E01"],
+            title="Chapter test event",
+            text="Approved test content",
+        )
+    )
+
+    app.state.django_content_client = django_client
+
+    return client, repository, session_id, django_client
+
+
+def test_chapter_and_story_event_commit_atomically(
+    chapter_event_runtime,
+):
+    client, repository, session_id, django_client = (
+        chapter_event_runtime
+    )
+
+    before = repository.load_state(session_id)
+
+    response = client.post(
+        advance_url(session_id),
+        json={"expectedRevision": before.revision},
+    )
+
+    assert response.status_code == 200, response.text
+
+    saved = repository.load_state(session_id)
+
+    assert saved.current_chapter == "CH01"
+    assert saved.unlocked_chapters == ["CH00", "CH01"]
+    assert saved.queued_story_events == ["STORY_001"]
+    assert saved.revision == before.revision + 1
+
+    assert repository.load_selection(session_id) == (
+        "C01",
+        saved.revision,
+    )
+
+    context = StoryContextService(repository).load(
+        session_id,
+        expected_revision=saved.revision,
+    )
+
+    assert context.current_chapter == "CH01"
+
+    django_client.get_approved_story_event.assert_called_once_with(
+        "CASE-001",
+        "EVT-CH01-001",
+    )
+
+
+def test_chapter_event_django_failure_preserves_state(
+    chapter_event_runtime,
+):
+    client, repository, session_id, django_client = (
+        chapter_event_runtime
+    )
+
+    before = repository.load_state(session_id)
+
+    django_client.get_approved_story_event.side_effect = (
+        ContentServiceError("Django unavailable")
+    )
+
+    response = client.post(
+        advance_url(session_id),
+        json={"expectedRevision": before.revision},
+    )
+
+    assert response.status_code == 503, response.text
+    assert repository.load_state(session_id) == before
+
+    assert repository.load_selection(session_id) == (
+        "C01",
+        before.revision,
+    )
+
+
+def test_stale_chapter_request_does_not_queue_event(
+    chapter_event_runtime,
+):
+    client, repository, session_id, django_client = (
+        chapter_event_runtime
+    )
+
+    before = repository.load_state(session_id)
+
+    response = client.post(
+        advance_url(session_id),
+        json={"expectedRevision": before.revision - 1},
+    )
+
+    assert response.status_code == 409
+
+    assert repository.load_state(session_id) == before
+
+    django_client.get_approved_story_event.assert_not_called()
+
+
+def test_chapter_event_is_not_duplicated(
+    chapter_event_runtime,
+):
+    client, repository, session_id, django_client = (
+        chapter_event_runtime
+    )
+
+    before = repository.load_state(session_id)
+
+    first = client.post(
+        advance_url(session_id),
+        json={"expectedRevision": before.revision},
+    )
+
+    assert first.status_code == 200, first.text
+
+    current = repository.load_state(session_id)
+
+    second = client.post(
+        advance_url(session_id),
+        json={"expectedRevision": current.revision},
+    )
+
+    assert second.status_code == 200, second.text
+
+    saved = repository.load_state(session_id)
+
+    assert saved.current_chapter == "CH02"
+    assert saved.queued_story_events == ["STORY_001"]
+
+    django_client.get_approved_story_event.assert_called_once()

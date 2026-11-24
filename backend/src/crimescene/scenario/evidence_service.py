@@ -1,6 +1,6 @@
 """Issue #28 - 증거 수집 및 NPC 해금 원자적 처리."""
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 from crimescene.scenario.evidence_collection import (
@@ -38,6 +38,7 @@ def collect_evidence_atomic(
     evaluator: PolicyEvaluator,
     unlock_rules: Mapping[str, NPCUnlockRule],
     django_prerequisites: tuple[str, ...] = (),
+    stage_events: Callable[[GameState], GameState] | None = None,
 ) -> EvidenceServiceResult:
     """증거 획득과 NPC 해금을 검증 후 한 번에 저장합니다."""
 
@@ -112,12 +113,15 @@ def collect_evidence_atomic(
         }
     )
 
-    # 4. #27에서 구현한 원자적 저장 메서드 재사용
+    # 4. 이벤트 큐를 저장 예정 GameState에 반영합니다.
+    if stage_events is not None:
+        updated = stage_events(updated)
+
+    # 5. 증거, 점수, NPC 해금, 이벤트 큐를 동시에 저장합니다.
     committed = repository.commit_state(
         expected_state=state,
         updated_state=updated,
     )
-
     return EvidenceServiceResult(
         state=committed,
         created=True,

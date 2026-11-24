@@ -6,7 +6,11 @@ from crimescene.chat.npc_behavior import build_npc_behavior_prompt
 from crimescene.chat.npc_persona import NPCPersona
 from crimescene.scenario.policy_evaluator import PolicyEvaluator
 from crimescene.scenario.schemas.access_policy import AccessPolicy
-from crimescene.scenario.schemas.game_state import EvidenceState, GameState
+from crimescene.scenario.schemas.game_state import (
+    EvidenceState,
+    GamePhase,
+    GameState,
+)
 
 
 def _state(*, unlocked=None, evidence=None, case_id="CASE-001") -> GameState:
@@ -293,3 +297,135 @@ def test_real_case001_persona_and_policy_integration():
         prompts.append(prompt)
 
     assert len(prompts) == len(set(prompts)) == 10
+
+
+@pytest.mark.parametrize(
+    ("chapter", "unlocked"),
+    [
+        ("CH01", ["CH00", "CH01"]),
+        ("CH02", ["CH00", "CH01", "CH02"]),
+    ],
+)
+def test_npc_prompt_uses_current_chapter(
+    personas, chapter, unlocked
+):
+    state = GameState.model_validate(
+        {
+            **_state().model_dump(mode="python"),
+            "phase": GamePhase.INVESTIGATION,
+            "current_chapter": chapter,
+            "unlocked_chapters": unlocked,
+        }
+    )
+
+    prompt = _prompt(personas, state=state)
+
+    assert f"현재 챕터: {chapter}" in prompt
+    assert "미해금 챕터" in prompt
+    assert "CH03" not in prompt
+    assert "CH04" not in prompt
+    assert "TEST_PRIVATE_CONTENT" not in prompt
+
+
+
+@pytest.mark.parametrize(
+    ("chapter", "unlocked_chapters"),
+    [
+        ("CH00", ["CH00"]),
+        ("CH01", ["CH00", "CH01"]),
+        ("CH02", ["CH00", "CH01", "CH02"]),
+    ],
+)
+def test_npc_prompt_reflects_current_chapter(
+    personas,
+    chapter,
+    unlocked_chapters,
+):
+    state_data = _state().model_dump(mode="python")
+    state_data.update(
+        phase=GamePhase.INVESTIGATION,
+        current_chapter=chapter,
+        unlocked_chapters=unlocked_chapters,
+    )
+    state = GameState.model_validate(state_data)
+
+    prompt = _prompt(personas, state=state)
+
+    assert f"현재 챕터: {chapter}" in prompt
+    assert "미해금 챕터의 장면이나 미래 사건을 추측하지 마세요." in prompt
+    assert "승인된 최신 근거만 사용하세요." in prompt
+
+    for future_chapter in ("CH00", "CH01", "CH02", "CH03", "CH04"):
+        if future_chapter > chapter:
+            assert f"현재 챕터: {future_chapter}" not in prompt
+
+
+@pytest.mark.parametrize(
+    ("collected", "recipient", "expect_updated"),
+    [
+        (False, None, False),
+        (True, None, False),
+        (True, "C02", False),
+        (True, "C01", True),
+    ],
+    ids=[
+        "not-collected",
+        "collected-only",
+        "presented-to-other-npc",
+        "presented-to-correct-npc",
+    ],
+)
+def test_npc_statement_changes_only_after_presentation(
+    personas,
+    collected,
+    recipient,
+    expect_updated,
+):
+    evidence = {"E05": EvidenceState(stage="found")} if collected else {}
+
+    state_data = _state(evidence=evidence).model_dump(mode="python")
+    state_data.update(
+        phase=GamePhase.INVESTIGATION,
+        presented={recipient: ["E05"]} if recipient else {},
+    )
+    state = GameState.model_validate(state_data)
+
+    policies = {
+        "POL-OPEN": _policy(),
+        "POL-PRESENTED": _policy(evidence=["E05"]).model_copy(
+            update={"required_presentations": ["C01:E05"]}
+        ),
+    }
+
+    old_card = _card("K-OLD")
+
+    new_card = _card(
+        "K-NEW",
+        policy_id="POL-PRESENTED",
+        status="known_to_character",
+        supersedes=["K-OLD"],
+        priority=2,
+    )
+    new_card["required_presentations"] = ["C01:E05"]
+
+    prompt = _prompt(
+        personas,
+        state=state,
+        cards=[old_card, new_card],
+        policies=policies,
+    )
+
+    claim = "공개 가능한 주장(character_claim)"
+    knowledge = "공개 가능한 지식(known_to_character)"
+
+    if expect_updated:
+        assert knowledge in prompt
+        assert claim not in prompt
+    else:
+        assert claim in prompt
+        assert knowledge not in prompt
+
+    # 지식 카드 원문과 내부 식별자 노출 방지
+    assert "TEST_PRIVATE_CONTENT" not in prompt
+    assert "K-OLD" not in prompt
+    assert "K-NEW" not in prompt

@@ -208,7 +208,22 @@ def build_npc_behavior_prompt(
     else:
         state_rules = _MIXED
 
-    # 6. 최종 프롬프트
+
+    # 6. 현재 챕터 기반 NPC 대화 맥락 구성
+    # 서버 GameState에서 검증한 챕터만 사용하며, 추가 지식 권한을 부여하지 않습니다.
+    chapter_context = (
+        "[현재 게임 진행 맥락]\n"
+        f"현재 챕터: {state.current_chapter}\n"
+        "현재 NPC에게 허용된 검증 근거만 사건 사실로 사용하세요.\n"
+        "미해금 챕터의 장면이나 미래 사건을 추측하지 마세요.\n"
+        "증거 제시로 진술이 변경된 경우 승인된 최신 근거만 사용하세요."
+    )
+
+    # 7. 최종 프롬프트 생성
     return (
-        f"{base_prompt}\n\n{_BEHAVIOR_RULES}\n\n{_CONVERSATION_RULES}\n\n{state_rules}"
+        f"{base_prompt}\n\n"
+        f"{chapter_context}\n\n"
+        f"{_BEHAVIOR_RULES}\n\n"
+        f"{_CONVERSATION_RULES}\n\n"
+        f"{state_rules}"
     )

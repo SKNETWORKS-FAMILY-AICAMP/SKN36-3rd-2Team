@@ -253,3 +253,95 @@ def test_output_guard_still_validates_current_source():
 
     assert reply.grounded is True
     assert reply.source_ids == (SOURCE_ID,)
+
+
+def test_superseded_statement_is_excluded_from_memory():
+    plan = make_plan()
+
+    old_quote = "저는 그날 본관에 방문하지 않았습니다."
+    old_source = "K-C01-OLD"
+
+    old_exchange = make_exchange(
+        quote=old_quote,
+        source_id=old_source,
+        revision=1,
+    )
+
+    current_exchange = make_exchange(
+        quote=QUOTE,
+        source_id=SOURCE_ID,
+        revision=2,
+    )
+
+    result = build_contextual_npc_reply_plan(
+        plan,
+        [old_exchange, current_exchange],
+        current_revision=3,
+    )
+
+    payload = get_payload(result)
+    history = payload["conversation_history"]
+
+    assert len(history) == 2
+
+    # 대체된 과거 진술은 답변 기억에서 제외합니다.
+    assert "npc_reply" not in history[0]
+    assert old_quote not in result.messages[1]["content"]
+    assert old_source not in result.messages[1]["content"]
+
+    # 현재 승인된 진술은 기억에 유지합니다.
+    assert QUOTE in history[1]["npc_reply"]
+
+    # 기존 승인 근거와 출처를 변경하지 않습니다.
+    assert result.authorized_context is plan.authorized_context
+    assert result.source_ids == plan.source_ids
+
+
+def test_repeated_question_preserves_authorized_memory():
+    plan = make_plan()
+    question = "그날 어디에 있었나요?"
+
+    exchanges = [
+        make_exchange(question=question, revision=revision)
+        for revision in range(3)
+    ]
+
+    result = build_contextual_npc_reply_plan(
+        plan,
+        exchanges,
+        current_revision=3,
+    )
+
+    history = get_payload(result)["conversation_history"]
+
+    assert len(history) == 3
+    assert all(turn["player_question"] == question for turn in history)
+    assert all(QUOTE in turn["npc_reply"] for turn in history)
+
+    assert result.source_ids == plan.source_ids
+    assert result.authorized_context is plan.authorized_context
+
+
+def test_other_npc_private_statement_is_not_reused():
+    plan = make_plan()
+
+    private_quote = "다른 인물만 알고 있는 비공개 정보입니다."
+
+    exchange = make_exchange(
+        quote=private_quote,
+        source_id="K-C02-PRIVATE",
+        revision=1,
+    )
+
+    result = build_contextual_npc_reply_plan(
+        plan,
+        [exchange],
+        current_revision=2,
+    )
+
+    history = get_payload(result)["conversation_history"]
+
+    assert "npc_reply" not in history[0]
+    assert private_quote not in result.messages[1]["content"]
+    assert "K-C02-PRIVATE" not in result.messages[1]["content"]
+    assert result.source_ids == plan.source_ids

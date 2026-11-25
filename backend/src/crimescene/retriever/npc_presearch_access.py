@@ -204,7 +204,9 @@ def search_policy_scoped_multisource_candidates(
     candidate_k: int = 30,
     relation_top_k: int = 20,
     evidence_top_k: int = 10,
+    published_holder_ids: tuple[str, ...] = (),
     rrf_k: int = 60,
+    collection_name: str | None = None,
 ) -> list[FusedSearchCandidate]:
     """NPC별 접근 정책을 검색 전에 적용한 3중 RRF 검색.
 
@@ -278,7 +280,16 @@ def search_policy_scoped_multisource_candidates(
         candidate_k=candidate_k,
         relation_top_k=relation_top_k,
         evidence_top_k=evidence_top_k,
+        **(
+            {"published_holder_ids": published_holder_ids}
+            if published_holder_ids else {}
+        ),
         rrf_k=rrf_k,
+        **(
+            {"collection_name": collection_name}
+            if collection_name is not None
+            else {}
+        ),
     )
 
     # 5. 검색 결과가 정책을 우회하지 않았는지 재확인

@@ -9,6 +9,10 @@ from crimescene.api.django_content_client import (
     DjangoContentClient,
 )
 from crimescene.retriever.authorized_hybrid_search import AuthorizedRAGChunk
+from crimescene.scenario.document_access import (
+    can_access_published_e26_document,
+)
+from crimescene.scenario.policy_evaluator import PolicyEvaluator
 from crimescene.scenario.schemas.document import PlayerDocument
 from crimescene.scenario.schemas.game_state import GameState
 
@@ -24,6 +28,10 @@ class EvidenceSearchPayload(TypedDict):
     items: list[EvidenceSearchItem]
 
 
+
+
+
+
 def select_mcp_evidence_results(
     *,
     state: GameState,
@@ -31,6 +39,7 @@ def select_mcp_evidence_results(
     documents: Sequence[PlayerDocument],
     django_client: DjangoContentClient,
     limit: int = 3,
+    evaluator: PolicyEvaluator | None = None,
 ) -> EvidenceSearchPayload:
     """Hybrid RAG와 Django 승인을 통과한 보유 증거만 반환합니다.
 
@@ -85,6 +94,17 @@ def select_mcp_evidence_results(
             continue
 
         evidence_ids = document.source_evidence_ids
+
+        # Protected evidence must not use the generic return path.
+        if "E30" in evidence_ids:
+            continue
+
+        if "E26" in evidence_ids and not can_access_published_e26_document(
+            state,
+            document,
+            evaluator,
+        ):
+            continue
 
         # 보유 증거에 직접 연결된 문서만 허용합니다.
         if not evidence_ids or not set(evidence_ids).issubset(collected):

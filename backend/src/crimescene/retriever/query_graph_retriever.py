@@ -5,10 +5,14 @@ from dataclasses import dataclass
 
 from neo4j import Driver
 
+from crimescene.retriever.expanded_graph_publication import (
+    search_published_holders,
+)
 from crimescene.retriever.graph_evidence_search import (
     EvidenceGraphResult,
 )
 from crimescene.retriever.graph_retriever import (
+    CharacterGraphContext,
     retrieve_character_graph,
 )
 from crimescene.retriever.graph_search import (
@@ -73,6 +77,7 @@ def retrieve_question_graph(
     allowed_entity_ids: Iterable[str] = (),
     relation_top_k: int = 20,
     evidence_top_k: int = 10,
+    published_holder_ids: tuple[str, ...] = (),
 ) -> QuestionGraphContext:
     """플레이어 질문과 관련된 Graph RAG 정보를 검색한다.
 
@@ -171,15 +176,29 @@ def retrieve_question_graph(
     # --------------------------------------------------
 
     # 기존 접근 제어 기능을 그대로 재사용
-    graph = retrieve_character_graph(
-        driver,
-        active_character_id,
-        state,
-        trusted_edges,
-        evidence_rules,
-        relation_top_k=relation_top_k,
-        evidence_top_k=evidence_top_k,
-    )
+    if state.content_version == "case001_1120":
+        graph = CharacterGraphContext(
+            character_id=active_character_id,
+            relations=(),
+            evidence=tuple(search_published_holders(
+                driver=driver,
+                state=state,
+                character_id=active_character_id,
+                evidence_rules=evidence_rules,
+                published_holder_ids=published_holder_ids,
+                top_k=evidence_top_k,
+            )),
+        )
+    else:
+        graph = retrieve_character_graph(
+            driver,
+            active_character_id,
+            state,
+            trusted_edges,
+            evidence_rules,
+            relation_top_k=relation_top_k,
+            evidence_top_k=evidence_top_k,
+        )
 
     # --------------------------------------------------
     # 6. 질문 관련 관계 필터링

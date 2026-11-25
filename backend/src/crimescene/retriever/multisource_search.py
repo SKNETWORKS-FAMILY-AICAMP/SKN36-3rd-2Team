@@ -24,6 +24,7 @@ from crimescene.retriever.query_graph_retriever import (
     retrieve_question_graph,
 )
 from crimescene.retriever.sparse_search import search_sparse_candidates
+from crimescene.retriever.versioned_retrieval import retrieval_options
 from crimescene.scenario.schemas.evidence import EvidenceRule
 from crimescene.scenario.schemas.game_state import GameState
 from crimescene.scenario.schemas.relationship import RelationshipSourceEdge
@@ -60,7 +61,9 @@ def search_multisource_candidates(
     candidate_k: int = 30,
     relation_top_k: int = 20,
     evidence_top_k: int = 10,
+    published_holder_ids: tuple[str, ...] = (),
     rrf_k: int = 60,
+    collection_name: str | None = None,
 ) -> list[FusedSearchCandidate]:
     """NPC 대화용 Dense + BM25 + Graph 통합 후보 검색.
 
@@ -170,6 +173,10 @@ def search_multisource_candidates(
         allowed_entity_ids=allowed_entities,
         relation_top_k=relation_top_k,
         evidence_top_k=evidence_top_k,
+        **(
+            {"published_holder_ids": published_holder_ids}
+            if published_holder_ids else {}
+        ),
     )
 
     # --------------------------------------------------
@@ -187,6 +194,9 @@ def search_multisource_candidates(
         case_id=state.case_id,
         character_id=active_character_id,
         top_k=candidate_k,
+        **retrieval_options(
+        state, collection_name=collection_name,
+    ),
     )
 
     # --------------------------------------------------
@@ -204,6 +214,9 @@ def search_multisource_candidates(
         case_id=state.case_id,
         character_id=active_character_id,
         top_k=candidate_k,
+        **retrieval_options(
+        state, collection_name=collection_name,
+    ),
     )
 
     # --------------------------------------------------

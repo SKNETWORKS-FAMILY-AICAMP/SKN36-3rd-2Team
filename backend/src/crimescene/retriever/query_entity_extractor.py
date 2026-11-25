@@ -6,7 +6,10 @@ from dataclasses import dataclass
 
 from crimescene.retriever.graph_search import (
     CHARACTER_IDS,
-    EVIDENCE_IDS,
+)
+from crimescene.retriever.versioned_retrieval import (
+    EXPANDED_IDS,
+    evidence_ids_for_version,
 )
 from crimescene.scenario.policy_evaluator import PolicyEvaluator
 from crimescene.scenario.schemas.evidence import EvidenceRule
@@ -99,7 +102,11 @@ def _is_visible(
         return entity_id in state.unlocked_characters
 
     # 2. 증거
-    if entity_id in EVIDENCE_IDS:
+    if entity_id in EXPANDED_IDS:
+        if entity_id not in evidence_ids_for_version(
+            state.content_version
+        ):
+            return False
         evidence = state.evidence.get(entity_id)
 
         return (
@@ -246,7 +253,9 @@ def extract_question_entities(
 
     if evidence_rules is not None:
         for evidence_id, rule in evidence_rules.items():
-            if evidence_id not in EVIDENCE_IDS:
+            if evidence_id not in evidence_ids_for_version(
+                state.content_version
+            ):
                 raise ValueError("지원하지 않는 증거 ID입니다.")
 
             if not isinstance(rule, EvidenceRule):

@@ -37,6 +37,14 @@ class PolicyEvaluator:
     ) -> None:
         self._policies = dict(policies)
 
+
+    def snapshot_policies(self) -> dict[str, AccessPolicy]:
+        """Return independent copies of registered policies."""
+        return {
+            key: policy.model_copy(deep=True)
+            for key, policy in self._policies.items()
+        }
+
     def is_allowed(
         self,
         policy_id: str,
@@ -53,6 +61,9 @@ class PolicyEvaluator:
         if policy is None:
             return False
 
+        if "INTERNAL_DRAFT_NOT_PUBLISHED" in policy.required_flags:
+            return False
+
         # 2. NPC 접근 조건
         if policy.required_character is not None:
             if active_character_id != policy.required_character:
@@ -62,6 +73,21 @@ class PolicyEvaluator:
                 return False
 
         # 3. 획득한 증거 확인
+        if policy.required_npc_stage is not None:
+            if (
+                policy.required_character is None
+                or active_character_id != policy.required_character
+                or active_character_id not in state.unlocked_characters
+            ):
+                return False
+
+            stage = state.npc_stages.get(
+                active_character_id, 1
+            )
+
+            if stage < policy.required_npc_stage:
+                return False
+
         collected_evidence = {
             evidence_id
             for evidence_id, evidence_state in state.evidence.items()

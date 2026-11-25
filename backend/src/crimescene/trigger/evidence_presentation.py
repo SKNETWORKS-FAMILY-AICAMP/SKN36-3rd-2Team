@@ -17,6 +17,10 @@ from crimescene.scenario.loaders.unlock_graph_loader import Case001UnlockRules
 from crimescene.scenario.policy_evaluator import PolicyEvaluator
 from crimescene.scenario.schemas.evidence import EvidenceRule
 from crimescene.scenario.schemas.game_state import GameState
+from crimescene.trigger.npc_stage_rules import (
+    PresentationStageRule,
+    apply_presentation_stage,
+)
 from crimescene.trigger.npc_trigger import (
     NPCTriggerRule,
     apply_npc_triggers,
@@ -69,6 +73,16 @@ def record_evidence_presentation(
 
     if not isinstance(evidence_id, str):
         raise TypeError("증거 ID는 문자열이어야 합니다.")
+
+    # Acquiring section A does not authorize whole-evidence
+    # presentation or restricted NPC dialogue.
+    if (
+        state.content_version == "case001_1120"
+        and evidence_id in {"E26", "E30"}
+    ):
+        raise PermissionError(
+            "Protected evidence presentation requires review."
+        )
 
     if not isinstance(evidence_rules, Mapping):
         raise TypeError("증거 규칙은 매핑이어야 합니다.")
@@ -157,6 +171,7 @@ def process_npc_dialogue_event(
     allowed_recipients: Mapping[str, frozenset[str]],
     presented_evidence_id: str | None = None,
     flag_config: Case001UnlockRules | None = None,  # 추가
+    presentation_stage_rules: tuple[PresentationStageRule, ...] = (),
 ) -> NPCDialogueEventResult:
     """증거 제시와 대화 트리거를 순서대로 처리한다.
 
@@ -203,9 +218,16 @@ def process_npc_dialogue_event(
             allowed_recipients=allowed_recipients,
         )
 
+    staged_state = apply_presentation_stage(
+        presentation.state,
+        active_character_id=active_character_id,
+        presented_evidence_id=presented_evidence_id,
+        rules=presentation_stage_rules,
+    )
+
     trigger_result = apply_npc_triggers(
         question,
-        state=presentation.state,
+        state=staged_state,
         active_character_id=active_character_id,
         rules=rule_list,
         evaluator=evaluator,

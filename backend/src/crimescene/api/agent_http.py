@@ -1,4 +1,4 @@
-﻿"""Issue #157 - Authenticated read-only Multi-Agent HTTP API."""
+"""Issue #157 - Authenticated read-only Multi-Agent HTTP API."""
 
 from collections.abc import Callable
 from typing import Annotated
@@ -216,7 +216,19 @@ def create_agent_router(
                 detail="Content service is unavailable.",
             )
 
+        if resources.content_version != state.content_version:
+            raise HTTPException(
+                status_code=503,
+                detail="Agent content version mismatch.",
+            )
+
         context = AgentContext.from_game_state(state)
+
+        version_options = (
+            {"content_version": state.content_version}
+            if state.content_version != "case001_v7_1"
+            else {}
+        )
 
         def server_factory(bound: BoundMCPContext):
             return create_readonly_mcp_server(
@@ -232,11 +244,13 @@ def create_agent_router(
         deduction = MCPDeductionAgent(
             load_state=repository.load_state,
             evidence_rules=resources.evidence_rules,
+            **version_options,
         )
 
         hint = MCPHintAgent(
             load_state=repository.load_state,
             evidence_rules=resources.evidence_rules,
+            **version_options,
         )
 
         workflow = MCPAgentOrchestrator(

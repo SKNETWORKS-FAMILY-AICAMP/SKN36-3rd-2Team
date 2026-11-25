@@ -20,6 +20,10 @@ from crimescene.agents.deduction_relations import (
     DeductionRelation,
     select_visible_deduction_relations,
 )
+from crimescene.retriever.versioned_retrieval import (
+    evidence_ids_for_version,
+    validate_catalog_version,
+)
 from crimescene.scenario.game_progress import CASE_ID
 from crimescene.scenario.policy_evaluator import PolicyEvaluator
 from crimescene.scenario.schemas.document import PlayerDocument
@@ -27,7 +31,7 @@ from crimescene.scenario.schemas.evidence import EvidenceRule
 from crimescene.scenario.schemas.game_state import GamePhase, GameState
 from crimescene.scenario.schemas.relationship import RelationshipSourceEdge
 
-EVIDENCE_ID_PATTERN = re.compile(r"E(?:0[1-9]|10)")
+EVIDENCE_ID_PATTERN = re.compile(r"E(?:0[1-9]|[12][0-9]|30)")
 MENTION_PATTERN = re.compile(r"(?<![A-Za-z0-9_])E\d{2}(?![A-Za-z0-9_])")
 VALID_STAGES = frozenset({"found", "resolved"})
 
@@ -62,6 +66,7 @@ class DeductionAgent:
         trusted_edges: Sequence[RelationshipSourceEdge] = (),
         documents: Sequence[PlayerDocument] = (),
         evaluator: PolicyEvaluator | None = None,
+        content_version: str = "case001_v7_1",
     ) -> None:
         if not callable(load_state):
             raise TypeError("GameState 조회 함수가 필요합니다.")
@@ -69,12 +74,18 @@ class DeductionAgent:
         if not isinstance(evidence_rules, Mapping):
             raise TypeError("증거 규칙은 Mapping이어야 합니다.")
 
+        allowed_ids = evidence_ids_for_version(content_version)
+
+        if content_version == "case001_1120":
+            validate_catalog_version(content_version, evidence_rules)
+
         validated: dict[str, EvidenceRule] = {}
 
         for evidence_id, rule in evidence_rules.items():
             if (
                 not isinstance(evidence_id, str)
                 or EVIDENCE_ID_PATTERN.fullmatch(evidence_id) is None
+                or evidence_id not in allowed_ids
                 or not isinstance(rule, EvidenceRule)
             ):
                 raise TypeError("유효하지 않은 증거 규칙입니다.")
@@ -106,6 +117,7 @@ class DeductionAgent:
         ):
             raise TypeError("올바른 PolicyEvaluator가 필요합니다.")
 
+        self._content_version = content_version
         self._load_state = load_state
         self._rules = MappingProxyType(validated)
         self._edges = tuple(edge.model_copy(deep=True) for edge in edges)
@@ -146,6 +158,7 @@ class DeductionAgent:
         if (
             state.case_id != CASE_ID
             or state.session_id != context.session_id
+            or state.content_version != self._content_version
         ):
             raise PermissionError("게임 세션 또는 사건이 일치하지 않습니다.")
 

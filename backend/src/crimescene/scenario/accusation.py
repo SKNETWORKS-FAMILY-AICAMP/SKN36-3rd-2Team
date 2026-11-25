@@ -6,8 +6,12 @@ from enum import StrEnum
 
 from crimescene.chat.npc_persona import EXPECTED_CHARACTER_IDS
 from crimescene.scenario.case_truth import CaseTruth
-from crimescene.scenario.evidence_collection import get_collection_progress
+from crimescene.scenario.expanded_ending import (
+    ExpandedCaseTruth,
+    resolve_correct_ending,
+)
 from crimescene.scenario.game_progress import (
+    EXPANDED_EVIDENCE_IDS,
     meets_accusation_requirements,
     transition_phase,
 )
@@ -43,19 +47,14 @@ def can_accuse(
     if state.case_id != "CASE-001":
         raise ValueError("지원하지 않는 사건입니다.")
 
-    progress = get_collection_progress(state, evidence_rules)
-
-    if progress.total_count != TOTAL_EVIDENCE or progress.total != TOTAL_SCORE:
-        raise ValueError("CASE-001 증거 규칙이 올바르지 않습니다.")
-
-    if state.score != progress.score:
-        raise ValueError("증거 점수의 무결성이 일치하지 않습니다.")
+    requirements_met = meets_accusation_requirements(
+        state, evidence_rules
+    )
 
     return (
         state.phase in (GamePhase.INVESTIGATION, GamePhase.ACCUSATION)
         and state.outcome in (None, "ONGOING")
-        and meets_accusation_requirements(state)
-        and progress.collected_count * 2 >= progress.total_count
+        and requirements_met
         and state.attempts_left > 0
     )
 
@@ -81,7 +80,11 @@ def enter_accusation(
     if state.phase == GamePhase.ACCUSATION:
         return state
 
-    return transition_phase(state, GamePhase.ACCUSATION)
+    return transition_phase(
+        state,
+        GamePhase.ACCUSATION,
+        evidence_rules=evidence_rules,
+    )
 
 
 def submit_accusation(
@@ -133,11 +136,42 @@ def submit_accusation(
         raise PermissionError("아직 해금되지 않은 NPC는 지목할 수 없습니다.")
 
     # 유효한 지목 시도에 대해서만 기회를 차감합니다.
+    expanded = state.content_version == "case001_1120"
+
+    if expanded:
+        if (
+            set(evidence_rules) != EXPANDED_EVIDENCE_IDS
+            or not isinstance(truth, ExpandedCaseTruth)
+        ):
+            raise PermissionError("Expanded truth unavailable")
+
+    elif (
+        set(evidence_rules) == EXPANDED_EVIDENCE_IDS
+        or isinstance(truth, ExpandedCaseTruth)
+    ):
+        raise PermissionError("Content version mismatch")
+
     remaining = state.attempts_left - 1
     correct = suspect_id == truth.perpetrator_character_id
+    ending_code = state.ending_code
+    deep_eligible = state.deep_eligible
+
+    if expanded:
+        deep_eligible = False
+
+        if correct:
+            ending_code = resolve_correct_ending(state)
+            deep_eligible = ending_code == "DEEP"
+
+        elif remaining == 0:
+            ending_code = "UNSOLVED"
 
     if correct:
-        outcome = "SUCCESS"
+        outcome = (
+            "ESTIMATED"
+            if ending_code == "ESTIMATED"
+            else "SUCCESS"
+        )
         phase = GamePhase.FINISHED
         status = AccusationStatus.CORRECT
 
@@ -156,6 +190,8 @@ def submit_accusation(
             **state.model_dump(),
             "attempts_left": remaining,
             "outcome": outcome,
+            "ending_code": ending_code,
+            "deep_eligible": deep_eligible,
             "phase": phase,
             "revision": state.revision + 1,
         }

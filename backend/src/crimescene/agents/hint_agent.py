@@ -17,8 +17,12 @@ from crimescene.agents.contracts import (
     AgentResult,
     AgentType,
 )
+from crimescene.retriever.versioned_retrieval import (
+    evidence_ids_for_version,
+    validate_catalog_version,
+)
 from crimescene.scenario.evidence_collection import get_collection_progress
-from crimescene.scenario.game_progress import CASE_ID, EXPECTED_EVIDENCE_IDS
+from crimescene.scenario.game_progress import CASE_ID
 from crimescene.scenario.schemas.evidence import EvidenceRule
 from crimescene.scenario.schemas.game_state import (
     ChapterCode,
@@ -74,6 +78,7 @@ class HintAgent:
         *,
         load_state: Callable[[str], GameState],
         evidence_rules: Mapping[str, EvidenceRule],
+        content_version: str = "case001_v7_1",
     ) -> None:
         if not callable(load_state):
             raise TypeError("GameState 조회 함수가 필요합니다.")
@@ -81,10 +86,15 @@ class HintAgent:
         if not isinstance(evidence_rules, Mapping) or not evidence_rules:
             raise ValueError("유효한 증거 규칙이 필요합니다.")
 
+        allowed_ids = evidence_ids_for_version(content_version)
+
+        if content_version == "case001_1120":
+            validate_catalog_version(content_version, evidence_rules)
+
         validated: dict[str, EvidenceRule] = {}
 
         for evidence_id, rule in evidence_rules.items():
-            if evidence_id not in EXPECTED_EVIDENCE_IDS:
+            if evidence_id not in allowed_ids:
                 raise ValueError("지원하지 않는 증거 ID입니다.")
 
             if not isinstance(rule, EvidenceRule):
@@ -92,6 +102,7 @@ class HintAgent:
 
             validated[evidence_id] = rule.model_copy(deep=True)
 
+        self._content_version = content_version
         self._load_state = load_state
         self._rules = MappingProxyType(validated)
 
@@ -125,6 +136,7 @@ class HintAgent:
         if (
             state.case_id != CASE_ID
             or state.session_id != context.session_id
+            or state.content_version != self._content_version
         ):
             raise PermissionError("게임 세션 또는 사건이 일치하지 않습니다.")
 

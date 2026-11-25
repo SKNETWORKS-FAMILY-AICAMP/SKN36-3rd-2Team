@@ -13,6 +13,7 @@ from crimescene.retriever.hybrid_search import (
     search_hybrid_candidates,
 )
 from crimescene.retriever.korean_bm25 import KoreanBM25Encoder
+from crimescene.retriever.versioned_retrieval import retrieval_options
 from crimescene.scenario.policy_evaluator import PolicyEvaluator
 from crimescene.scenario.rag_access import AuthorizedRAGChunk
 from crimescene.scenario.schemas.document import PlayerDocument
@@ -37,6 +38,7 @@ def search_authorized_hybrid_context(
     matched_topics: Iterable[str] = (),
     candidate_k: int = DEFAULT_CANDIDATE_K,
     top_k: int = DEFAULT_TOP_K,
+    collection_name: str | None = None,
 ) -> list[AuthorizedRAGChunk]:
     """검색 결과 중 현재 게임 상태에서 허용된 정보만 반환한다.
 
@@ -116,6 +118,9 @@ def search_authorized_hybrid_context(
         character_id=active_character_id,
         candidate_k=candidate_k,
         top_k=candidate_k,
+        **retrieval_options(
+        state, collection_name=collection_name,
+    ),
     )
 
     # 7. 검색 UUID를 신뢰 원본 청크와 연결

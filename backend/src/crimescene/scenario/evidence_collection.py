@@ -4,6 +4,11 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from crimescene.scenario.acquisition_policy import (
+    EXTENDED_EVIDENCE_IDS,
+    AcquisitionPolicy,
+    allows_acquisition,
+)
 from crimescene.scenario.policy_evaluator import PolicyEvaluator
 from crimescene.scenario.schemas.evidence import EvidenceRule
 from crimescene.scenario.schemas.game_state import (
@@ -79,6 +84,7 @@ def collect_evidence(
     acquisition_policy_ids: Mapping[str, str],
     evaluator: PolicyEvaluator,
     active_character_id: str,
+    approved_routes: Mapping[str, AcquisitionPolicy] | None = None,
 ) -> EvidenceCollectionResult:
     """서버 접근 정책을 통과한 증거만 수집합니다."""
 
@@ -130,14 +136,35 @@ def collect_evidence(
             raise PermissionError("선행 증거를 아직 수집하지 않았습니다.")
 
     # 수집 권한은 서버에 등록된 정책으로만 검증합니다.
-    policy_id = acquisition_policy_ids.get(evidence_id)
-
-    if not isinstance(policy_id, str) or not evaluator.is_allowed(
-        policy_id,
-        state,
-        active_character_id=active_character_id,
+    if (
+        state.content_version == "case001_1120"
+        or evidence_id in EXTENDED_EVIDENCE_IDS
     ):
-        raise PermissionError("증거 수집 조건을 충족하지 않았습니다.")
+        # Extended evidence requires a server-approved route.
+        route_policy = (approved_routes or {}).get(evidence_id)
+
+        if (
+            not isinstance(route_policy, AcquisitionPolicy)
+            or route_policy.evidence_id != evidence_id
+            or not allows_acquisition(
+                route_policy,
+                state,
+                active_character_id=active_character_id,
+            )
+        ):
+            raise PermissionError(
+                "Approved acquisition route required"
+            )
+
+    else:
+        policy_id = acquisition_policy_ids.get(evidence_id)
+
+        if not isinstance(policy_id, str) or not evaluator.is_allowed(
+            policy_id,
+            state,
+            active_character_id=active_character_id,
+        ):
+            raise PermissionError("증거 수집 조건을 충족하지 않았습니다.")
 
     next_evidence = {
         **state.evidence,

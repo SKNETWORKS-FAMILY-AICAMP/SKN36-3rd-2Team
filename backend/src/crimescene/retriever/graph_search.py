@@ -5,6 +5,10 @@ from dataclasses import dataclass
 
 from neo4j import Driver
 
+from crimescene.retriever.versioned_retrieval import (
+    EXPANDED_IDS,
+    evidence_ids_for_version,
+)
 from crimescene.scenario.policy_evaluator import PolicyEvaluator
 from crimescene.scenario.schemas.access_policy import AccessPolicy
 from crimescene.scenario.schemas.game_state import GameState
@@ -18,6 +22,26 @@ MATCH (person:CaseEntity {
     case_id: $case_id
 })
 WHERE r.case_id = $case_id
+RETURN DISTINCT r.edge_id AS edge_id
+ORDER BY edge_id
+LIMIT $candidate_limit
+"""
+
+
+EXPANDED_GRAPH_QUERY = """
+MATCH (person:Case1120StagingEntity {
+    case_id: $case_id,
+    entity_id: $character_id,
+    content_version: 'case001_1120'
+})-[r:CASE1120_STAGING_RELATION]->(neighbor:Case1120StagingEntity {
+    case_id: $case_id,
+    content_version: 'case001_1120'
+})
+WHERE r.kind = 'npc_relationship'
+AND NOT neighbor.entity_id IN ['E26', 'E30']
+AND r.contract_approved = true
+AND r.runtime_enabled = true
+AND r.minimum_npc_stage <= $npc_stage
 RETURN DISTINCT r.edge_id AS edge_id
 ORDER BY edge_id
 LIMIT $candidate_limit
@@ -51,6 +75,15 @@ def is_relation_visible(
 
     # 1. 사건 ID 검증
     if edge.case_id != state.case_id:
+        return False
+
+    # Protected evidence relationships require a separate
+    # publication path, not the generic relationship policy.
+    if (
+        state.content_version == "case001_1120"
+        and {edge.source_id, edge.target_id}
+        & {"E26", "E30"}
+    ):
         return False
 
     # 2. 엔딩 전용 관계
@@ -174,10 +207,17 @@ def search_character_relations(
     # 관계 내용 및 공개 조건은 서버 원본을 기준으로 검증한다.
     with driver.session() as session:
         records = session.run(
-            GRAPH_QUERY,
+            EXPANDED_GRAPH_QUERY
+            if state.content_version == "case001_1120"
+            else GRAPH_QUERY,
             case_id=state.case_id,
             character_id=character_id,
             candidate_limit=1000,
+            **(
+                {"npc_stage": state.npc_stages.get(character_id, 1)}
+                if state.content_version == "case001_1120"
+                else {}
+            ),
         ).data()
 
     # --------------------------------------------------
@@ -246,7 +286,11 @@ def search_character_relations(
         ):
             continue
         # 미수집 증거에 연결된 관계 차단
-        if neighbor_id in EVIDENCE_IDS:
+        if neighbor_id in EXPANDED_IDS:
+            if neighbor_id not in evidence_ids_for_version(
+                state.content_version
+            ):
+                continue
             evidence_state = state.evidence.get(neighbor_id)
 
             if (

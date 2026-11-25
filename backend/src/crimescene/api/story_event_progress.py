@@ -4,6 +4,7 @@ from collections.abc import Callable, Mapping
 
 from crimescene.api.django_content_client import (
     ApprovedStoryEvent,
+    ContentServiceError,
     ContentServiceNotFoundError,
 )
 from crimescene.api.story_event_conditions import (
@@ -98,10 +99,26 @@ def stage_story_events(
             approved = fetch_approved_event(event_key)
 
         except ContentServiceNotFoundError:
+            if source_id == "STORY_026":
+                raise ContentServiceError(
+                    "Required story event approval unavailable"
+                ) from None
+
             # 미승인 또는 미게시 콘텐츠는 큐에 추가하지 않습니다.
             continue
 
         # 기존 객체를 변경하지 않고 검증용 후보를 생성합니다.
+        if source_id == "STORY_026":
+            if (
+                not isinstance(approved, ApprovedStoryEvent)
+                or approved.event_key != event_key
+                or approved.chapter != "CH03"
+                or set(approved.required_evidence_ids) != {"E20", "E26"}
+            ):
+                raise ContentServiceError(
+                    "Invalid STORY_026 approval contract"
+                )
+
         candidate = GameState.model_validate(
             {
                 **updated.model_dump(mode="python"),
@@ -121,5 +138,9 @@ def stage_story_events(
 
         if allowed is not None:
             updated = candidate
+        elif source_id == "STORY_026":
+            raise ContentServiceError(
+                "Required story event delivery denied"
+            )
 
     return updated

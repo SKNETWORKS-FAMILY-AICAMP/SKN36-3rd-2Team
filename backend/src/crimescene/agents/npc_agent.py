@@ -28,6 +28,8 @@ from crimescene.trigger.case001_dialogue import (
 from crimescene.trigger.evidence_reaction import (
     resolve_evidence_reaction,
 )
+from crimescene.trigger.expanded_dialogue import ReviewedDialogueBinding
+from crimescene.trigger.npc_stage_rules import PresentationStageRule
 from crimescene.trigger.npc_trigger import NPCTriggerRule
 
 
@@ -60,6 +62,9 @@ class NPCAgent:
         trigger_rules: tuple[NPCTriggerRule, ...] = (),
         flag_config: Case001UnlockRules | None = None,
         stage_events: Callable[[GameState], GameState] | None = None,
+        npc_acquisition: Callable[..., GameState] | None = None,
+        reviewed_dialogue_bindings: tuple[ReviewedDialogueBinding, ...] = (),
+        presentation_stage_rules: tuple[PresentationStageRule, ...] = (),
     ) -> None:
         if not isinstance(repository, SQLiteCase001Repository):
             raise TypeError("SQLiteCase001Repository가 필요합니다.")
@@ -83,6 +88,13 @@ class NPCAgent:
             raise TypeError("이벤트 평가 함수가 올바르지 않습니다.")
 
         self._stage_events = stage_events
+
+        if npc_acquisition is not None and not callable(npc_acquisition):
+            raise TypeError("Invalid NPC acquisition callback")
+
+        self._npc_acquisition = npc_acquisition
+        self._reviewed_dialogue_bindings = reviewed_dialogue_bindings
+        self._presentation_stage_rules = presentation_stage_rules
 
     @property
     def agent_type(self) -> AgentType:
@@ -144,6 +156,19 @@ class NPCAgent:
             if self._stage_events is not None
             else {}
         )
+
+        if self._reviewed_dialogue_bindings:
+            stage_options["reviewed_dialogue_bindings"] = (
+                self._reviewed_dialogue_bindings
+            )
+
+        if self._presentation_stage_rules:
+            stage_options["presentation_stage_rules"] = (
+                self._presentation_stage_rules
+            )
+
+        if self._npc_acquisition is not None:
+            stage_options["npc_acquisition"] = self._npc_acquisition
 
         dialogue = run_case001_npc_dialogue_atomic(
             question,

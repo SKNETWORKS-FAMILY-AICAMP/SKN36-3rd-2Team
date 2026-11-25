@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import (
     BaseModel,
@@ -44,6 +44,7 @@ class AccessPolicy(BaseModel):
     # 정책이 적용되는 NPC
     # NPC와 무관한 정책은 필드가 생략될 수 있음
     required_character: str | None = None
+    required_npc_stage: Literal[1, 2, 3] | None = None
 
 
 class AccessPolicyCatalog(RootModel[dict[PolicyId, AccessPolicy]]):

@@ -17,6 +17,7 @@ from pydantic import (
 
 from crimescene.scenario.schemas.game_state import (
     ChapterCode,
+    ContentVersion,
     GamePhase,
     GameState,
 )
@@ -37,7 +38,7 @@ class AgentRequest(BaseModel):
     message: str = Field(min_length=1, max_length=200)
     presented_evidence_id: str | None = Field(
         default=None,
-        pattern=r"^E(?:0[1-9]|10)$",
+        pattern=r"^E(?:0[1-9]|[12][0-9]|30)$",
     )
 
     @field_validator("message")
@@ -67,6 +68,7 @@ class AgentContext(BaseModel):
 
     session_id: str = Field(min_length=1, max_length=128)
     case_id: str = Field(min_length=1)
+    content_version: ContentVersion = "case001_v7_1"
     revision: int = Field(ge=0)
 
     phase: GamePhase
@@ -100,6 +102,7 @@ class AgentContext(BaseModel):
         return cls(
             session_id=state.session_id,
             case_id=state.case_id,
+            content_version=state.content_version,
             revision=state.revision,
             phase=state.phase,
             current_chapter=state.current_chapter,

@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CASE-001 · B 담당 화면 데모</title>
+  <!-- 데모 전용 페이지(서버 없이 더블클릭). Django 실제 화면은 frontend/templates/partials/case_b/ 조각을 씁니다. -->
+  <link rel="stylesheet" href="../css/b.css">
+</head>
+<body class="b-page">
+
+  <!-- 위쪽: 제목, 챕터, B가 맡은 버튼(증거함·관계도·수사 기록·최종 추리) -->
+  <header class="b-header">
+    <h1>마지막 기록: 졸업하지 못한 밤</h1>
+    <span id="b-chapter" class="b-muted"></span>
+    <div class="b-actions">
+      <button type="button" id="b-evidence-btn">증거함 <span id="b-evidence-count"></span></button>
+      <button type="button" id="b-relations-btn">인물관계도</button>
+      <button type="button" id="b-records-btn">수사 기록</button>
+      <button type="button" id="b-accuse-btn" hidden>최종 추리</button>
+    </div>
+  </header>
+
+  <div class="b-layout">
+    <!-- 왼쪽: 면담 대상 목록 (b-interview.js가 채움) -->
+    <aside class="b-side" id="b-people"></aside>
+
+    <main class="b-center">
+      <!-- 모의 응답 시험 버튼: 실제 서버 연결(USE_MOCK=false) 때는 숨겨집니다 -->
+      <div class="b-mockbar" id="b-mockbar">
+        <span>모의 응답 시험 · 실제 해금 규칙과 무관</span>
+        <button type="button" id="b-mock-all">인물 전체 공개 + 최종 추리 열기</button>
+        <button type="button" id="b-mock-event">새 알림 하나 만들기</button>
+        <span>질문에 "동의"를 넣으면 동의 모달 시험</span>
+      </div>
+
+      <!-- 가운데: 면담실 (b-interview.js가 채움) -->
+      <div id="b-interview"></div>
+    </main>
+  </div>
+
+  <!-- 불러오는 순서가 중요합니다. 공통 API → 설정 → 도구 → 상태 → B API → (모의) → 화면들 → 시작 -->
+  <script src="../../common/api.js"></script>
+  <script src="../js/b-config.js"></script>
+  <script src="../js/b-roster.js"></script>
+  <script src="../js/b-ui.js"></script>
+  <script src="../js/b-store.js"></script>
+  <script src="../js/b-api.js"></script>
+  <script src="b-mock.js"></script>  <!-- 데모 전용: 모의 응답 -->
+  <script src="../js/b-interview.js"></script>
+  <script src="../js/b-evidence.js"></script>
+  <script src="../js/b-relations.js"></script>
+  <script src="../js/b-records.js"></script>
+  <script src="../js/b-accuse.js"></script>
+  <script src="../js/b-ending.js"></script>
+  <script src="../js/b-events.js"></script>
+  <script src="../js/b-consent.js"></script>
+  <script src="../js/b-main.js"></script>
+
+  <!-- 데모 페이지 전용: 모의 응답 시험 버튼 -->
+  <script>
+    (function () {
+      if (!B.config.USE_MOCK) { B.$('b-mockbar').hidden = true; return; }
+      B.$('b-mock-all').onclick = function () {
+        B.mock._unlockAll().then(function (g) { B.store.setGame(g); return B.evidence.refresh(); })
+          .then(function () { B.toast('예시: 인물 10명 공개, 최종 추리 열림'); });
+      };
+      B.$('b-mock-event').onclick = function () {
+        B.mock._pushEvent().then(B.events.check);
+      };
+    })();
+  </script>
+</body>
+</html>

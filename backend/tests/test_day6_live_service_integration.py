@@ -1,8 +1,10 @@
-﻿"""Issue #158 - Live external service integration tests."""
+"""Issue #158 - Live external service integration tests."""
 
 import asyncio
 import os
 import socket
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Event, Thread
 
 import httpx
 import pytest
@@ -11,13 +13,33 @@ from mcp import Client
 
 from crimescene.api.app import create_app
 from crimescene.api.chat_bootstrap import load_chat_runtime
-from crimescene.api.django_content_client import DjangoContentClient
+from crimescene.api.django_content_client import (
+    ContentServiceError,
+    DjangoContentClient,
+)
 from crimescene.mcp.context import BoundMCPContext
 from crimescene.mcp.server import create_readonly_mcp_server
 from crimescene.retriever.authorized_hybrid_search import (
     search_authorized_hybrid_context,
 )
-from crimescene.scenario.schemas.game_state import GameState
+from crimescene.retriever.graph_evidence_search import (
+    search_character_evidence,
+)
+from crimescene.retriever.graph_search import (
+    CHARACTER_IDS,
+    search_character_relations,
+)
+from crimescene.retriever.multisource_rrf import (
+    fuse_multisource_candidates,
+)
+from crimescene.retriever.npc_graph_knowledge_guard import (
+    restrict_npc_graph_knowledge,
+)
+from crimescene.retriever.query_graph_retriever import (
+    QuestionGraphContext,
+)
+from crimescene.scenario.game_progress import create_initial_state
+from crimescene.scenario.schemas.game_state import GamePhase, GameState
 from crimescene.settings import settings
 from crimescene.trigger.atomic_dialogue import SQLiteCase001Repository
 
@@ -427,3 +449,360 @@ def test_live_django_connection_failure(game):
     assert repository.load_state(
         state.session_id
     ) == state
+
+
+@pytest.fixture
+def slow_django():
+    """Run a real HTTP server that delays its response."""
+
+    received = Event()
+    release = Event()
+
+    class SlowHandler(BaseHTTPRequestHandler):
+
+        def do_GET(self):
+            received.set()
+            release.wait(timeout=10)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0),
+        SlowHandler,
+    )
+
+    thread = Thread(
+        target=server.serve_forever,
+        daemon=True,
+    )
+
+    thread.start()
+
+    try:
+        yield (
+            f"http://127.0.0.1:{server.server_port}",
+            received,
+        )
+
+    finally:
+        release.set()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+
+
+def test_live_django_read_timeout(slow_django):
+    """Verify a real HTTP read timeout without mocking."""
+
+    base_url, received = slow_django
+
+    with DjangoContentClient(
+        base_url=base_url,
+        token="timeout-test-" + "x" * 40,
+        timeout_seconds=0.3,
+    ) as client, pytest.raises(ContentServiceError) as captured:
+        client.get_evidence_requirements(
+            "CASE-001",
+            "E01",
+        )
+
+    assert received.is_set()
+
+    assert isinstance(
+        captured.value.__cause__,
+        httpx.ReadTimeout,
+    )
+
+
+def test_live_agent_django_timeout(game, slow_django):
+    """Reject a collaboration when approval lookup times out."""
+
+    app, client, repository, _, state, query = game
+
+    base_url, received = slow_django
+
+    with DjangoContentClient(
+        base_url=base_url,
+        token="timeout-test-" + "x" * 40,
+        timeout_seconds=0.3,
+    ) as delayed:
+
+        app.state.django_content_client = delayed
+
+        response = client.post(
+            agent_url(state, "assist"),
+            json=request_body(state, query, "assist"),
+        )
+
+    assert received.is_set()
+
+    assert response.status_code == 503
+
+    assert "deduction" not in response.json()
+    assert "hint" not in response.json()
+
+    assert "127.0.0.1" not in response.text
+    assert "timeout-test-" not in response.text
+    assert "traceback" not in response.text.lower()
+
+    assert repository.load_state(
+        state.session_id
+    ) == state
+
+
+def test_live_graph_relation_policy(resources):
+    """Verify real Neo4j relations against GameState policies."""
+
+    initial = create_initial_state("day6-graph-policy")
+
+    empty = GameState.model_validate({
+        **initial.model_dump(mode="python"),
+        "phase": GamePhase.INVESTIGATION,
+        "unlocked_characters": sorted(CHARACTER_IDS),
+        "outcome": "ONGOING",
+    })
+
+    driver = resources.neo4j_driver
+    edges = resources.trusted_edges
+
+    checked = set()
+    restricted = set()
+
+    for edge in edges:
+
+        characters = {
+            edge.source_id,
+            edge.target_id,
+        } & CHARACTER_IDS
+
+        if not characters:
+            continue
+
+        character_id = min(characters)
+
+        neighbor = (
+            edge.target_id
+            if edge.source_id == character_id
+            else edge.source_id
+        )
+
+        before = search_character_relations(
+            driver,
+            character_id,
+            empty,
+            edges,
+            top_k=100,
+        )
+
+        before_ids = {
+            item.edge_id
+            for item in before
+        }
+
+        if (
+            edge.access_scope != "public"
+            or neighbor in resources.evidence_rules
+        ):
+            assert edge.edge_id not in before_ids
+            restricted.add(edge.edge_id)
+
+        evidence_ids = set(edge.required_evidence)
+        presented = {}
+
+        for value in edge.required_presentations:
+            npc_id, evidence_id = value.split(":")
+            evidence_ids.add(evidence_id)
+            presented.setdefault(npc_id, []).append(evidence_id)
+
+        if neighbor in resources.evidence_rules:
+            evidence_ids.add(neighbor)
+
+        ending = edge.required_ending
+
+        allowed = GameState.model_validate({
+            **empty.model_dump(mode="python"),
+            "phase": (
+                GamePhase.FINISHED
+                if ending is not None
+                else GamePhase.INVESTIGATION
+            ),
+            "evidence": {
+                eid: {"stage": "found"}
+                for eid in evidence_ids
+            },
+            "presented": presented,
+            "flags": list(edge.required_flags),
+            "score": sum(
+                resources.evidence_rules[eid].score
+                for eid in evidence_ids
+            ),
+            "outcome": (
+                "SUCCESS"
+                if ending == "DEEP"
+                else ending or "ONGOING"
+            ),
+            "deep_eligible": ending == "DEEP",
+        })
+
+        after = search_character_relations(
+            driver,
+            character_id,
+            allowed,
+            edges,
+            top_k=100,
+        )
+
+        assert edge.edge_id in {
+            item.edge_id
+            for item in after
+        }, edge.edge_id
+
+        checked.add(edge.edge_id)
+
+        if ending == "DEEP":
+            normal = allowed.model_copy(
+                update={"deep_eligible": False}
+            )
+
+            result = search_character_relations(
+                driver,
+                character_id,
+                normal,
+                edges,
+                top_k=100,
+            )
+
+            assert edge.edge_id not in {
+                item.edge_id
+                for item in result
+            }
+
+        locked = allowed.model_copy(
+            update={"unlocked_characters": []}
+        )
+
+        assert search_character_relations(
+            driver,
+            character_id,
+            locked,
+            edges,
+        ) == []
+
+    assert checked
+    assert restricted
+
+    print("Verified Relation Count:", len(checked))
+    print("Restricted Relation Count:", len(restricted))
+
+
+def test_live_graph_npc_knowledge_scope(resources):
+    """Verify real evidence graph and NPC knowledge boundaries."""
+
+    initial = create_initial_state("day6-npc-graph-policy")
+    rules = resources.evidence_rules
+    driver = resources.neo4j_driver
+
+    empty = GameState.model_validate({
+        **initial.model_dump(mode="python"),
+        "phase": GamePhase.INVESTIGATION,
+        "unlocked_characters": sorted(CHARACTER_IDS),
+        "outcome": "ONGOING",
+    })
+
+    collected = GameState.model_validate({
+        **empty.model_dump(mode="python"),
+        "evidence": {
+            evidence_id: {"stage": "found"}
+            for evidence_id in rules
+        },
+        "score": sum(rule.score for rule in rules.values()),
+    })
+
+    verified = set()
+
+    for character_id in sorted(CHARACTER_IDS):
+
+        expected = {
+            evidence_id
+            for evidence_id, rule in rules.items()
+            if rule.holder == character_id
+        }
+
+        assert search_character_evidence(
+            driver,
+            character_id,
+            empty,
+            rules,
+        ) == []
+
+        results = search_character_evidence(
+            driver,
+            character_id,
+            collected,
+            rules,
+            top_k=100,
+        )
+
+        actual = {
+            item.evidence_id
+            for item in results
+        }
+
+        assert actual == expected
+
+        if not results:
+            continue
+
+        graph = QuestionGraphContext(
+            character_id=character_id,
+            matched_entity_ids=(),
+            relations=(),
+            evidence=tuple(results),
+        )
+
+        candidates = fuse_multisource_candidates(
+            [],
+            [],
+            graph,
+        )
+
+        denied = restrict_npc_graph_knowledge(
+            candidates,
+            graph,
+            state=collected,
+            active_character_id=character_id,
+            trusted_edges=resources.trusted_edges,
+            evidence_rules=rules,
+        )
+
+        assert denied.candidates == ()
+        assert denied.graph_context.evidence == ()
+
+        permitted_id = min(expected)
+
+        permitted = restrict_npc_graph_knowledge(
+            candidates,
+            graph,
+            state=collected,
+            active_character_id=character_id,
+            trusted_edges=resources.trusted_edges,
+            evidence_rules=rules,
+            known_evidence_ids=[permitted_id],
+        )
+
+        assert {
+            item.evidence_id
+            for item in permitted.graph_context.evidence
+        } == {permitted_id}
+
+        assert {
+            item.item_id
+            for item in permitted.candidates
+        } == {permitted_id}
+
+        verified.update(actual)
+
+    assert verified == set(rules)
+
+    print("Verified Evidence Holders:", len(verified))

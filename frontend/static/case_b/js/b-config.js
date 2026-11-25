@@ -25,6 +25,10 @@ B.config = {
   // 타임라인 탭: 서버 API가 없어 팀 결정 전까지 숨깁니다.
   SHOW_TIMELINE: false,
 
+  // 게임이 프롤로그 상태면 B가 대신 조사 단계로 넘길지.
+  // 데모용 true. A 오프닝이 /prologue/complete를 부르게 되면 scripts.html에서 false로.
+  AUTO_PROLOGUE: true,
+
   // E30 동의 모달을 띄우는 서버 신호의 필드 이름.
   // 아직 백엔드에 없습니다. 이름이 정해지면 여기만 바꿉니다.
   CONSENT_FLAG: 'consentRequest',

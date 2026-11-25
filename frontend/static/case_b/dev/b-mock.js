@@ -33,6 +33,7 @@ window.B = window.B || {};
   B.mock = {
     createGame: function () { return wait(M.game); },
     getGame: function () { return wait(M.game); },
+    completePrologue: function () { return wait(M.game); },
     select: function (id) { M.game.activeCharacterId = id; bump(); return wait(M.game); },
     chatHistory: function (id) { return wait(M.history[id] || []); },
     chat: function (question, evidenceId) {
@@ -74,11 +75,11 @@ window.B = window.B || {};
       M.game.attemptsLeft = Math.max(0, M.game.attemptsLeft - 1);
       bump();
       var result = M.game.attemptsLeft === 0 ? 'INCORRECT' : 'NOT_ENOUGH_EVIDENCE';
-      if (M.game.attemptsLeft === 0) { M.game.phase = 'FINISHED'; M.game.outcome = 'UNSOLVED'; }
+      if (M.game.attemptsLeft === 0) { M.game.phase = 'FINISHED'; M.game.outcome = 'FAILURE'; }
       return wait({ result: result, attemptsLeft: M.game.attemptsLeft, game: M.game });
     },
     ending: function () {
-      return wait({ outcome: M.game.outcome || 'UNSOLVED', title: '엔딩 제목(예시)', message: '엔딩 문장은 서버가 보냅니다(예시).',
+      return wait({ outcome: M.game.outcome || 'FAILURE', title: '엔딩 제목(예시)', message: '엔딩 문장은 서버가 보냅니다(예시).',
         deepEligible: false, truth: null, game: M.game });
     },
     consent: function (accepted) {

@@ -1,0 +1,126 @@
+/* =============================================================
+   b.css — B 담당 화면 스타일
+   색과 모양은 확정 목업(6차본)의 값을 그대로 가져왔습니다.
+   클래스 이름은 모두 b- 로 시작해서 A의 스타일과 겹치지 않습니다.
+   ============================================================= */
+:root {
+  --b-bg: #090a0c; --b-panel: #141518; --b-card: #201f20; --b-wood: #3b3029;
+  --b-brass: #80633d; --b-gold: #c6a473; --b-paper: #d5c8b2; --b-sub: #a29b90;
+}
+
+/* ---- 데모 페이지 틀 (Django로 옮길 때는 A의 공통 틀을 씀) ---- */
+.b-page { margin: 0; background: var(--b-bg); color: var(--b-paper); font: 14px/1.55 system-ui, sans-serif; }
+.b-page button, .b-page input, .b-page textarea, .b-page select { font: inherit; color: inherit; }
+.b-header { min-height: 64px; display: flex; align-items: center; gap: 16px; padding: 10px 20px;
+  border-bottom: 1px solid var(--b-wood); background: #151312; }
+.b-header h1 { margin: 0; font-size: 18px; color: var(--b-gold); }
+.b-header .b-actions { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+.b-layout { display: grid; grid-template-columns: 230px minmax(0, 1fr); min-height: calc(100dvh - 64px); }
+.b-side { background: var(--b-panel); padding: 14px; border-right: 1px solid var(--b-wood); overflow: auto; }
+.b-center { padding: 16px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.b-mockbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px 10px;
+  border: 1px dashed var(--b-brass); border-radius: 6px; color: var(--b-sub); font-size: 12px; }
+
+/* ---- 공통 버튼 ---- */
+.b-page button, .b-modal button, .b-ending button {
+  background: #211d19; border: 1px solid var(--b-brass); border-radius: 6px; padding: 8px 12px; cursor: pointer; color: var(--b-paper);
+}
+.b-page button:hover, .b-page button:focus-visible, .b-modal button:hover, .b-modal button:focus-visible { background: #423322; outline: 1px solid var(--b-gold); }
+.b-page button:disabled, .b-modal button:disabled { opacity: .45; cursor: default; }
+.b-primary { background: #3b3029 !important; border-color: var(--b-gold) !important; }
+.active { background: #493827 !important; border-color: var(--b-gold) !important; }
+.b-muted { color: var(--b-sub); }
+.b-help { font-size: 12px; margin: 10px 0; }
+
+/* ---- 면담 대상 목록 ---- */
+.b-side h3 { font-size: 12px; color: var(--b-gold); letter-spacing: .12em; margin: 8px 0; }
+.b-person { display: block; width: 100%; text-align: left; margin: 7px 0; }
+.b-person small { display: block; color: var(--b-sub); font-size: 12px; }
+
+/* ---- 면담실 ---- */
+.b-room-empty { display: grid; place-items: center; min-height: 360px; border: 1px solid var(--b-wood);
+  border-radius: 8px; color: var(--b-sub); background: #171513; }
+.b-talk { display: grid; grid-template-columns: minmax(160px, 34%) 1fr; gap: 12px; height: 62vh; min-height: 380px; }
+.b-portrait { background: linear-gradient(#29251f, #171514); border: 1px solid var(--b-wood); border-radius: 8px;
+  display: grid; place-items: center; overflow: hidden; }
+.b-portrait img { width: 100%; height: 100%; object-fit: contain; }
+.b-chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 1px solid var(--b-wood);
+  border-radius: 8px; background: #181615; padding: 12px; }
+.b-titlebar { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.b-log { flex: 1; overflow: auto; margin-top: 8px; }
+.b-msg { padding: 10px; margin: 6px 0; background: #25211d; border-radius: 6px; }
+.b-msg.me { background: #1d1b19; }
+.b-msg b { color: var(--b-gold); }
+.b-msg p { margin: 4px 0 6px; white-space: pre-wrap; }
+.b-msg.latest { border-left: 3px solid var(--b-gold); background: #33291f; }
+.b-pin { font-size: 12px; padding: 4px 8px !important; }
+.b-chip-row { min-height: 30px; display: flex; align-items: center; font-size: 12px; margin-top: 6px; }
+.b-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px 4px 10px; border: 1px solid var(--b-gold);
+  border-radius: 999px; background: #3b3029; }
+.b-chip button { padding: 0 6px !important; border-radius: 999px !important; }
+.b-form { display: flex; gap: 8px; margin-top: 6px; }
+.b-form input { flex: 1; min-width: 0; background: #101012; border: 1px solid #645442; border-radius: 6px; padding: 9px; }
+
+/* ---- 모달 ---- */
+/* hidden 속성이 display 값에 덮이지 않게 합니다(없으면 닫힌 창이 클릭을 막음). */
+[hidden] { display: none !important; }
+.b-modal { position: fixed; inset: 0; background: #000a; display: grid; place-items: center; z-index: 20; padding: 16px; }
+.b-card { width: min(960px, 96vw); max-height: 88vh; overflow: auto; background: var(--b-card); color: var(--b-paper);
+  border: 1px solid var(--b-gold); border-radius: 10px; padding: 18px; }
+.b-card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+.b-card-head h2 { margin: 0; color: var(--b-gold); font-size: 20px; }
+.b-toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); background: #2a231d; border: 1px solid var(--b-gold);
+  padding: 9px 16px; border-radius: 6px; z-index: 40; color: var(--b-paper); }
+
+/* ---- 증거함 ---- */
+.b-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 12px; }
+.b-tile { background: #171513; border: 1px solid var(--b-wood); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.b-tile p { margin: 0; }
+.b-tile-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+.b-photo { width: 100%; max-height: 240px; object-fit: contain; background: #0f0e0d; border-radius: 6px; }
+.b-photo.none { display: grid; place-items: center; height: 120px; color: var(--b-sub); font-size: 12px; }
+.b-split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+.b-body { white-space: pre-wrap; }
+.b-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+.b-doc { background: #efe6d2; color: #2a231c; border-radius: 4px; padding: 14px; white-space: pre-wrap; }
+
+/* ---- 관계도 ---- */
+.b-graph { width: 100%; max-height: 62vh; }
+.b-edge { stroke: var(--b-gold); stroke-width: 1.5; opacity: .8; }
+.b-edge-label { fill: var(--b-paper); font-size: 11px; }
+.b-node-ring { fill: #52422d; stroke: var(--b-gold); stroke-width: 2; }
+.b-node-label { fill: var(--b-paper); font-size: 12px; }
+
+/* ---- 수사 기록 ---- */
+.b-record-body h4 { color: var(--b-gold); margin: 14px 0 6px; }
+.b-line { margin: 4px 0; }
+.b-line b { color: var(--b-gold); margin-right: 6px; }
+.b-record-body textarea { width: 100%; min-height: 220px; background: #101012; border: 1px solid #645442; border-radius: 6px; padding: 10px; box-sizing: border-box; }
+
+/* ---- 최종 추리 ---- */
+.b-suspects { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 10px; margin: 12px 0; }
+.b-suspect { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px; border: 1px solid var(--b-wood);
+  border-radius: 8px; cursor: pointer; background: #171513; }
+.b-suspect img { width: 72px; height: 90px; object-fit: cover; border-radius: 4px; }
+.b-suspect:has(input:checked) { border-color: var(--b-gold); background: #3b3029; }
+
+/* ---- 새 수사 알림 ---- */
+.b-event-text { white-space: pre-wrap; margin-bottom: 14px; }
+
+/* ---- 엔딩 ---- */
+.b-ending { position: fixed; inset: 0; z-index: 30; background: radial-gradient(#1b1714, #050505); display: grid; place-items: center; padding: 20px; }
+.b-ending-card { width: min(720px, 94vw); text-align: center; color: var(--b-paper); }
+.b-ending-card h2 { color: var(--b-gold); font-size: 26px; margin: 14px 0; }
+.b-ending-msg { white-space: pre-wrap; line-height: 1.8; }
+.b-stamp { display: inline-block; padding: 6px 18px; border: 3px solid #8c2a2a; color: #c4554f; font-weight: 700;
+  transform: rotate(-4deg); letter-spacing: .1em; }
+.b-stamp.ok { border-color: var(--b-gold); color: var(--b-gold); }
+.b-truth { text-align: left; margin: 16px auto; max-width: 560px; background: #171513; padding: 12px; border-radius: 8px; }
+.b-ending .b-tile-actions { justify-content: center; margin-top: 18px; }
+
+@media (max-width: 900px) {
+  .b-layout { grid-template-columns: 1fr; }
+  .b-talk { grid-template-columns: 1fr; height: auto; }
+  .b-portrait { height: 260px; }
+  .b-split { grid-template-columns: 1fr; }
+}

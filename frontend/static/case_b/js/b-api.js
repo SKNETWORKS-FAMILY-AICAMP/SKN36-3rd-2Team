@@ -22,6 +22,9 @@ window.B = window.B || {};
     // 새 게임. 서버는 본문이 없어야 받습니다.
     createGame: function () { return request('/games', { method: 'POST' }); },
     getGame: function () { return request(game('')); },
+    // 프롤로그 끝 → 조사 단계(INVESTIGATION). 본문 없음.
+    // 실제 화면에서는 A의 오프닝이 끝날 때 부릅니다. B 데모는 시작할 때 부릅니다.
+    completePrologue: function () { return request(game('/prologue/complete'), { method: 'POST' }); },
 
     // 면담할 인물을 서버에 알림. 대화(chat)는 이 인물에게 갑니다.
     select: function (characterId) {

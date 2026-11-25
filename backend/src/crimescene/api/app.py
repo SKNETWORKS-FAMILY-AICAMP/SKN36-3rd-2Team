@@ -32,6 +32,7 @@ from crimescene.agents.orchestrator import (
     AgentOrchestrator,
 )
 from crimescene.agents.registry import AgentRegistry
+from crimescene.api.agent_http import create_agent_router
 from crimescene.api.django_content_client import (
     ContentServiceError,
     ContentServiceNotFoundError,
@@ -2157,6 +2158,14 @@ def create_app(
         create_story_event_router(
             repository=repository,
             load_owned_request=load_owned_request,
+        )
+    )
+
+    app.include_router(
+        create_agent_router(
+            repository=repository,
+            load_owned_request=load_owned_request,
+            dialogue_resources=dialogue_resources,
         )
     )
 

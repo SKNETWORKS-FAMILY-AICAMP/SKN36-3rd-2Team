@@ -33,6 +33,27 @@ LIMIT $top_k
 """
 
 
+
+EXPANDED_EVIDENCE_QUERY = """
+MATCH (holder:Case1120StagingEntity {
+    case_id: $case_id,
+    entity_id: $character_id,
+    content_version: 'case001_1120'
+})-[r:CASE1120_STAGING_RELATION]->(e:Case1120StagingEntity {
+    case_id: $case_id,
+    content_version: 'case001_1120'
+})
+WHERE r.kind = 'evidence_holder'
+AND r.contract_approved = true
+AND r.runtime_enabled = true
+AND e.entity_id IN $evidence_ids
+RETURN DISTINCT
+    e.entity_id AS evidence_id,
+    holder.entity_id AS holder_id
+ORDER BY evidence_id
+LIMIT $top_k
+"""
+
 @dataclass(frozen=True)
 class EvidenceGraphResult:
     """권한 검증이 완료된 증거 관계."""
@@ -83,6 +104,12 @@ def search_character_evidence(
             raise TypeError("검증되지 않은 증거 규칙입니다.")
 
         # 현재 인물과 관련된 증거만 선택
+        if (
+            state.content_version == "case001_1120"
+            and evidence_id in {"E26", "E30"}
+        ):
+            continue
+
         if rule.holder != character_id:
             continue
 
@@ -104,7 +131,9 @@ def search_character_evidence(
     # 4. Neo4j 검색
     with driver.session() as session:
         records = session.run(
-            EVIDENCE_QUERY,
+            EXPANDED_EVIDENCE_QUERY
+            if state.content_version == "case001_1120"
+            else EVIDENCE_QUERY,
             case_id=state.case_id,
             character_id=character_id,
             evidence_ids=sorted(allowed_ids),

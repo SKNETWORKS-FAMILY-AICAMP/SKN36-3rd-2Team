@@ -21,6 +21,8 @@ class GamePhase(StrEnum):
 # CASE-001에서 지원하는 챕터 코드
 ChapterCode = Literal["CH00", "CH01", "CH02", "CH03", "CH04"]
 
+ContentVersion = Literal["case001_v7_1", "case001_1120"]
+
 
 class EvidenceState(BaseModel):
     """증거별 발견 및 해결 진행 상태."""
@@ -51,6 +53,9 @@ class GameState(BaseModel):
     case_id: str = Field(min_length=1)
     session_id: str = Field(min_length=1)
 
+    # Legacy saves remain bound to the original content.
+    content_version: ContentVersion = "case001_v7_1"
+
     # ============================================================
     # 2. 게임 진행 상태
     # ============================================================
@@ -74,6 +79,9 @@ class GameState(BaseModel):
 
     # 해금된 NPC
     unlocked_characters: list[str]
+
+    # Server-owned NPC conversation stages.
+    npc_stages: dict[str, int] = Field(default_factory=dict)
 
     # 증거별 진행 상태
     # 예: {"E01": {"stage": "found"}}
@@ -139,6 +147,13 @@ class GameState(BaseModel):
     score: int = Field(ge=0)
 
     outcome: str | None
+    ending_code: Literal[
+        "NO_EVIDENCE",
+        "UNSOLVED",
+        "ESTIMATED",
+        "FULL",
+        "DEEP",
+    ] | None = None
     deep_eligible: bool
 
     # 게임 상태 버전
@@ -162,7 +177,53 @@ class GameState(BaseModel):
     def validate_chapter_progress(self):
         """챕터 진행 상태의 무결성을 검증합니다."""
 
+        if self.ending_code is not None:
+            expected_outcome = {
+                "NO_EVIDENCE": "FAILURE",
+                "UNSOLVED": "FAILURE",
+                "ESTIMATED": "ESTIMATED",
+                "FULL": "SUCCESS",
+                "DEEP": "SUCCESS",
+            }[self.ending_code]
+
+            if (
+                self.content_version != "case001_1120"
+                or self.phase != GamePhase.FINISHED
+                or self.outcome != expected_outcome
+                or self.deep_eligible != (
+                    self.ending_code == "DEEP"
+                )
+            ):
+                raise ValueError("Invalid ending state")
+
+        valid_npcs = {f"C{i:02d}" for i in range(1, 11)}
+
+        for npc_id, stage in self.npc_stages.items():
+            if (
+                npc_id not in valid_npcs
+                or npc_id not in self.unlocked_characters
+                or type(stage) is not int
+                or stage not in (1, 2, 3)
+            ):
+                raise ValueError("Invalid NPC conversation stage")
+
         chapters = self.unlocked_chapters
+
+        if self.content_version == "case001_1120":
+            unlocked = set(chapters)
+
+            if (
+                unlocked.intersection({"CH02", "CH03", "CH04"})
+                and "CH01" not in unlocked
+            ):
+                raise ValueError("CH01 must be unlocked first")
+
+            if (
+                "CH04" in unlocked
+                and not {"CH02", "CH03"}.issubset(unlocked)
+            ):
+                raise ValueError("Both investigation branches required")
+
 
         # 동일 챕터 중복 해금 방지
         if len(chapters) != len(set(chapters)):

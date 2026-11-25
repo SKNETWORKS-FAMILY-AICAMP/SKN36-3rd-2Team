@@ -126,6 +126,7 @@ def _render_context(
 def build_authorized_multisource_context(
     candidates: Sequence[FusedSearchCandidate],
     *,
+    published_holder_ids: tuple[str, ...] = (),
     trusted_records: Iterable[HybridChunkRecord],
     documents: Iterable[PlayerDocument],
     npc_cards: Iterable[Mapping[str, object]],
@@ -323,6 +324,7 @@ def build_authorized_multisource_context(
             # Graph 원본 및 GameState 권한 재검증
             graph_result = build_graph_rag_context(
                 narrowed_graph,
+                **({"published_holder_ids": published_holder_ids} if published_holder_ids else {}),
                 state=state,
                 registry=registry,
                 trusted_edges=all_edges,

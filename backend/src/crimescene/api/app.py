@@ -57,21 +57,30 @@ from crimescene.scenario.accusation_service import (
 )
 from crimescene.scenario.case_truth import CaseTruth
 from crimescene.scenario.chapter_progress import (
-    CHAPTER_ORDER,
     ChapterUnlockRule,
     advance_chapter_atomic,
+    can_revisit_investigation_chapter,
+    next_chapter_choices,
 )
 from crimescene.scenario.document_access import select_authorized_player_documents
+from crimescene.scenario.e26_section_policy import (
+    can_access_e26_section_for_state,
+)
 from crimescene.scenario.evidence_collection import get_collection_progress
 from crimescene.scenario.evidence_service import collect_evidence_atomic
 from crimescene.scenario.game_progress import (
+    EXPECTED_EVIDENCE_IDS,
     create_initial_state,
     meets_accusation_requirements,
     transition_phase,
 )
 from crimescene.scenario.loaders.unlock_graph_loader import Case001UnlockRules
 from crimescene.scenario.schemas.access_policy import AccessPolicy
-from crimescene.scenario.schemas.game_state import GamePhase, GameState
+from crimescene.scenario.schemas.game_state import (
+    ChapterCode,
+    GamePhase,
+    GameState,
+)
 from crimescene.trigger.atomic_dialogue import SQLiteCase001Repository
 from crimescene.trigger.npc_trigger import NPCTriggerRule
 
@@ -160,6 +169,7 @@ class ChapterAdvanceRequest(BaseModel):
     )
 
     expectedRevision: int = Field(ge=0)
+    targetChapter: ChapterCode | None = None
 
 
 class ChatRequest(BaseModel):
@@ -174,7 +184,7 @@ class ChatRequest(BaseModel):
 
     presentedEvidenceId: str | None = Field(
         default=None,
-        pattern=r"^E(?:0[1-9]|10)$",
+        pattern=r"^E(?:0[1-9]|[12][0-9]|30)$",
     )
 
     @field_validator("question")
@@ -440,6 +450,18 @@ def create_app(
                 detail="게임을 찾을 수 없습니다.",
             ) from None
 
+        runtime_version = getattr(
+            app.state,
+            "content_version",
+            "case001_v7_1",
+        )
+
+        if state.content_version != runtime_version:
+            raise HTTPException(
+                status_code=409,
+                detail="Game content version mismatch",
+            )
+
         return state
 
     def load_owned_request(
@@ -636,7 +658,7 @@ def create_app(
 
         # 실제 지목 판정은 #29 엔진에서 수행합니다.
         # 여기서는 화면 표시용 최소 진입 조건만 계산합니다.
-        can_accuse = (
+        accusation_allowed = (
             state.phase
             in (
                 GamePhase.INVESTIGATION,
@@ -647,6 +669,26 @@ def create_app(
             and meets_accusation_requirements(state)
         )
 
+        resources = getattr(
+            app.state,
+            "dialogue_resources",
+            dialogue_resources,
+        )
+
+        rules = getattr(resources, "evidence_rules", None)
+        total_score = TOTAL_SCORE
+
+        if rules and not set(rules).issubset(EXPECTED_EVIDENCE_IDS):
+            try:
+                accusation_allowed = can_accuse(state, rules)
+                progress = get_collection_progress(state, rules)
+                total_score = progress.total
+            except (ValueError, TypeError):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Invalid game progress data",
+                ) from None
+
         return GameResponse(
             sessionId=state.session_id,
             phase=state.phase,
@@ -654,9 +696,9 @@ def create_app(
             unlockedCharacters=list(state.unlocked_characters),
             collection=CollectionResponse(
                 score=state.score,
-                total=TOTAL_SCORE,
+                total=total_score,
             ),
-            canAccuse=can_accuse,
+            canAccuse=accusation_allowed,
             attemptsLeft=state.attempts_left,
             outcome=state.outcome,
             revision=state.revision,
@@ -692,6 +734,11 @@ def create_app(
 
         state = create_initial_state(
             session_id,
+            content_version=getattr(
+                app.state,
+                "content_version",
+                "case001_v7_1",
+            ),
         )
 
         # 최초 NPC는 C01입니다.
@@ -775,6 +822,15 @@ def create_app(
             case001_owner,
         )
 
+        if (
+            state.content_version == "case001_v7_1"
+            and payload.targetChapter is not None
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="Legacy chapter does not accept targetChapter",
+            )
+
         if state.revision != payload.expectedRevision:
             raise HTTPException(
                 status_code=409,
@@ -790,15 +846,36 @@ def create_app(
                 detail="챕터를 진행할 수 없는 상태입니다.",
             )
 
-        current_index = CHAPTER_ORDER.index(state.current_chapter)
+        choices = next_chapter_choices(state)
 
-        if current_index >= len(CHAPTER_ORDER) - 1:
+        if not choices:
             raise HTTPException(
                 status_code=409,
-                detail="마지막 챕터입니다.",
+                detail="No next chapter available",
             )
 
-        next_chapter = CHAPTER_ORDER[current_index + 1]
+        if payload.targetChapter is None:
+            if len(choices) != 1:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Select targetChapter",
+                )
+
+            next_chapter = choices[0]
+
+        else:
+            next_chapter = payload.targetChapter
+
+            if (
+                next_chapter not in choices
+                and not can_revisit_investigation_chapter(
+                    state, next_chapter
+                )
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Chapter transition not allowed",
+                )
 
         rules = getattr(
             request.app.state,
@@ -969,11 +1046,119 @@ def create_app(
                 detail="콘텐츠 서비스를 사용할 수 없습니다.",
             )
 
-        try:
-            scene = client.get_player_scene(
-                state.case_id,
-                scene_id,
+        scene_release = None
+
+        if scene_id == "SC-0402":
+            approved_actions = getattr(
+                request.app.state,
+                "approved_investigation_actions",
+                frozenset(),
             )
+
+            acquired = {
+                eid
+                for eid, item in state.evidence.items()
+                if item.stage in {"found", "resolved"}
+            }
+
+            if (
+                state.phase != GamePhase.INVESTIGATION
+                or state.outcome not in (None, "ONGOING")
+                or state.current_chapter != "CH04"
+                or "CH04" not in state.unlocked_chapters
+                or not isinstance(approved_actions, frozenset)
+                or "inspect-e29-a" not in approved_actions
+                or not {"E26", "E28", "E29"}.issubset(acquired)
+                or not {
+                    "INF_POST_EVENT_DELETE",
+                    "ACT_RECOVERED_AUDIO_VERIFIED",
+                }.issubset(state.flags)
+                or not can_access_e26_section_for_state(
+                    "A",
+                    state,
+                    section_a_approved=getattr(
+                        request.app.state,
+                        "e26_section_a_approved",
+                        False,
+                    ),
+                )
+            ):
+                raise HTTPException(404, "Scene unavailable")
+
+            scene_release = getattr(
+                request.app.state,
+                "investigation_release_version",
+                None,
+            )
+
+            if not isinstance(scene_release, str) or not scene_release:
+                raise HTTPException(
+                    503, "Content release unavailable"
+                )
+
+        if scene_id == "SC-0306":
+            from crimescene.scenario.investigation_progress import InferenceRule
+
+            approved_rules = getattr(
+                request.app.state,
+                "approved_inference_rules",
+                (),
+            )
+
+            inference_approved = (
+                isinstance(approved_rules, tuple)
+                and any(
+                    isinstance(rule, InferenceRule)
+                    and rule.inference_id == "INF_POST_EVENT_DELETE"
+                    and rule.chapter == "CH03"
+                    and rule.evidence_ids == frozenset({"E20", "E26"})
+                    and rule.required_flags == frozenset({
+                        "ACT_AUDIT_LOG_ACCESS_VERIFIED"
+                    })
+                    for rule in approved_rules
+                )
+            )
+
+            if (
+                state.phase != GamePhase.INVESTIGATION
+                or state.outcome not in (None, "ONGOING")
+                or state.current_chapter != "CH03"
+                or "CH03" not in state.unlocked_chapters
+                or "INF_POST_EVENT_DELETE" not in state.flags
+                or not inference_approved
+                or not can_access_e26_section_for_state(
+                    "A",
+                    state,
+                    section_a_approved=getattr(
+                        request.app.state,
+                        "e26_section_a_approved",
+                        False,
+                    ),
+                )
+            ):
+                raise HTTPException(404, "Scene unavailable")
+
+            scene_release = getattr(
+                request.app.state,
+                "investigation_release_version",
+                None,
+            )
+
+            if not isinstance(scene_release, str) or not scene_release:
+                raise HTTPException(503, "Content release unavailable")
+
+        try:
+            if scene_id in {"SC-0306", "SC-0402"}:
+                scene = client.get_player_scene(
+                    state.case_id,
+                    scene_id,
+                    investigation_release=scene_release,
+                )
+            else:
+                scene = client.get_player_scene(
+                    state.case_id,
+                    scene_id,
+                )
         except ContentServiceNotFoundError:
             raise HTTPException(
                 status_code=404,
@@ -987,7 +1172,8 @@ def create_app(
 
         # 현재 챕터이면서 해금된 장면만 공개합니다.
         if (
-            scene.chapter != state.current_chapter
+            scene.scene_id != scene_id
+            or scene.chapter != state.current_chapter
             or scene.chapter not in state.unlocked_chapters
         ):
             raise HTTPException(
@@ -1251,6 +1437,16 @@ def create_app(
             )
 
         if (
+            state.content_version == "case001_v7_1"
+            and body.presentedEvidenceId is not None
+            and int(body.presentedEvidenceId[1:]) > 10
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="Invalid evidence ID for this version",
+            )
+
+        if (
             body.presentedEvidenceId is not None
             and body.presentedEvidenceId not in state.evidence
         ):
@@ -1297,6 +1493,46 @@ def create_app(
             trigger_rules=live_triggers,
             flag_config=live_flags,
             stage_events=stage_game_story_events,
+            **(
+                {
+                    "npc_acquisition": (
+                        request.app.state.published_npc_acquisition
+                    )
+                }
+                if getattr(
+                    request.app.state,
+                    "published_npc_acquisition",
+                    None,
+                ) is not None
+                else {}
+            ),
+            **(
+                {
+                    "presentation_stage_rules":
+                    app.state.presentation_stage_rules,
+                }
+                if getattr(
+                    app.state,
+                    "presentation_stage_rules",
+                    (),
+                )
+                else {}
+            ),
+            **(
+                {
+                    "reviewed_dialogue_bindings": getattr(
+                        app.state,
+                        "reviewed_dialogue_bindings",
+                        (),
+                    )
+                }
+                if getattr(
+                    app.state,
+                    "reviewed_dialogue_bindings",
+                    (),
+                )
+                else {}
+            ),
         )
         orchestrator = AgentOrchestrator(
             AgentRegistry([npc_agent]),
@@ -1423,8 +1659,21 @@ def create_app(
                 status_code=409, detail="조사 단계에서만 증거를 수집할 수 있습니다."
             )
 
-        # 명시적인 E01~E10만 허용합니다. 내부 규칙 및 관리자 정보는 반환하지 않습니다.
-        if evidence_id not in {f"E{i:02d}" for i in range(1, 11)}:
+        # Only server-registered acquisition routes are accepted.
+        approved_routes = getattr(
+            request.app.state,
+            "approved_acquisition_routes",
+            {},
+        ) or {}
+
+        legacy_ids = {
+            f"E{i:02d}" for i in range(1, 11)
+        }
+
+        if (
+            evidence_id not in legacy_ids
+            and evidence_id not in approved_routes
+        ):
             raise HTTPException(status_code=422, detail="유효하지 않은 증거 ID입니다.")
 
         selection = repository.load_selection(session_id)
@@ -1436,7 +1685,7 @@ def create_app(
 
         resources = getattr(request.app.state, "dialogue_resources", None)
         flags = getattr(request.app.state, "dialogue_flag_config", None)
-        policy_ids = getattr(request.app.state, "acquisition_policy_ids", None)
+        policy_ids = getattr(request.app.state, "acquisition_policy_ids", None) or {}
         acquisition_evaluator = (
             getattr(request.app.state, "acquisition_evaluator", resources.evaluator)
             if resources is not None
@@ -1444,12 +1693,19 @@ def create_app(
         )
 
         # 획득 정책 또는 해금 규칙이 누락되면 절대로 증거를 지급하지 않습니다.
-        if resources is None or flags is None or not policy_ids:
+        if (
+            resources is None
+            or flags is None
+            or not (policy_ids or approved_routes)
+        ):
             raise HTTPException(
                 status_code=503, detail="증거 수집 엔진이 준비되지 않았습니다."
             )
 
-        if evidence_id not in policy_ids:
+        if (
+            evidence_id not in policy_ids
+            and evidence_id not in approved_routes
+        ):
             raise HTTPException(
                 status_code=403, detail="이 증거의 수집 조건이 설정되지 않았습니다."
             )
@@ -1457,7 +1713,7 @@ def create_app(
         # Django 콘텐츠 정책이 활성화된 경우에만 추가 검증합니다.
         django_prerequisites: tuple[str, ...] = ()
 
-        if getattr(
+        if evidence_id in approved_routes or getattr(
             request.app.state,
             "django_evidence_gate_enabled",
             False,
@@ -1500,6 +1756,7 @@ def create_app(
                 unlock_rules=flags.npc_rules,
                 django_prerequisites=django_prerequisites,
                 stage_events=stage_game_story_events,
+                approved_routes=approved_routes,
             )
 
         except ContentServiceError:
@@ -1680,6 +1937,16 @@ def create_app(
             dialogue_resources,
         )
 
+        if evidence_id == "E30" or (
+            evidence_id == "E26"
+            and getattr(
+                request.app.state,
+                "e26_section_a_approved",
+                False,
+            ) is not True
+        ):
+            raise HTTPException(404, "Evidence unavailable")
+
         documents: list[EvidenceDocumentResponse] = []
         if (
             resources is not None
@@ -1727,6 +1994,24 @@ def create_app(
 
         # 플레이어에게 이미 공개된 증거 문서 또는 증거 해금 조건과
         # 직접 연결된 관계만 공개합니다. 관리자 관계/미해금 NPC는 제외합니다.
+        # Return only the independently authorized section A.
+        if evidence_id == "E26":
+            if (
+                len(documents) != 1
+                or documents[0].id != "DOC-1120-E26-A"
+            ):
+                raise HTTPException(404, "Evidence unavailable")
+
+            return EvidenceDetailResponse(
+                id=evidence_id,
+                title=rule.name,
+                body=documents[0].body,
+                holderId=rule.holder,
+                acquiredBy=None,
+                confirmedRelations=[],
+                documents=documents,
+            )
+
         approved_doc_ids = {document.id for document in documents}
         visible_people = set(state.unlocked_characters) & set(EXPECTED_CHARACTER_IDS)
         visible_people.add("V01")  # 이미 공개된 피해자
@@ -1736,6 +2021,11 @@ def create_app(
             getattr(resources, "trusted_edges", ()) if resources is not None else ()
         )
         for edge in sorted(trusted_edges or (), key=lambda item: item.edge_id):
+            if state.content_version == "case001_1120" and (
+                {"E26", "E30"} & set(edge.required_evidence)
+            ):
+                continue
+
             # 증거를 가진 인물과 직접 연결된 관계만 표시합니다.
             if rule.holder not in {edge.source_id, edge.target_id}:
                 continue
@@ -1798,6 +2088,10 @@ def create_app(
             )
 
         # 이미지 디렉터리는 환경변수로 설정합니다.
+        # Protected images require independent approval.
+        if evidence_id in {"E26", "E30"}:
+            raise HTTPException(404, "Evidence image unavailable")
+
         image_dir_raw = os.getenv(
             "CRIMESCENE_EVIDENCE_IMAGE_DIR",
             ".local/case001_photos",
@@ -2102,6 +2396,59 @@ def create_app(
         )
 
         # 게임 종료 전 엔딩 정보 접근 차단
+        if state.content_version == "case001_1120":
+            from crimescene.scenario.expanded_ending import (
+                ExpandedCaseTruth,
+            )
+
+            code = state.ending_code
+
+            if state.phase != GamePhase.FINISHED or code is None:
+                raise HTTPException(
+                    409, "Ending unavailable"
+                )
+
+            titles = {
+                "NO_EVIDENCE": "\uc99d\uac70 \ubd80\uc871",
+                "UNSOLVED": "\uc218\uc0ac \uc2e4\ud328",
+                "ESTIMATED": "\ucd94\uc815 \uc131\ub9bd",
+                "FULL": "\uc0ac\uac74 \ud574\uacb0",
+                "DEEP": "\uc2ec\ud654 \uc5d4\ub529",
+            }
+
+            public_truth = None
+
+            if code in {"FULL", "DEEP"}:
+                truth = getattr(
+                    request.app.state,
+                    "case_truth",
+                    None,
+                )
+
+                if (
+                    not isinstance(truth, ExpandedCaseTruth)
+                    or truth.case_id != state.case_id
+                ):
+                    raise HTTPException(
+                        503, "Ending unavailable"
+                    )
+
+                public_truth = EndingTruthResponse(
+                    perpetratorId=truth.perpetrator_character_id,
+                    motive=truth.motive,
+                    causeOfDeath=truth.cause_of_death,
+                    crimeMethod=truth.crime_method,
+                )
+
+            return EndingResponse(
+                outcome=code,
+                title=titles[code],
+                message=titles[code],
+                deepEligible=code == "DEEP",
+                truth=public_truth,
+                game=game_response(state),
+            )
+
         if state.phase != GamePhase.FINISHED or state.outcome not in (
             "SUCCESS",
             "FAILURE",
@@ -2166,6 +2513,42 @@ def create_app(
             repository=repository,
             load_owned_request=load_owned_request,
             dialogue_resources=dialogue_resources,
+        )
+    )
+
+    from crimescene.api.investigation_http import (
+        create_investigation_router,
+    )
+
+    app.include_router(
+        create_investigation_router(
+            repository=repository,
+            load_owned_request=load_owned_request,
+            stage_events=stage_game_story_events,
+        )
+    )
+
+    from crimescene.api.inference_http import (
+        create_inference_router,
+    )
+
+    app.include_router(
+        create_inference_router(
+            repository=repository,
+            load_owned_request=load_owned_request,
+            stage_events=stage_game_story_events,
+        )
+    )
+
+    from crimescene.api.expanded_ending_http import (
+        create_expanded_ending_router,
+    )
+
+    app.include_router(
+        create_expanded_ending_router(
+            repository=repository,
+            load_owned_request=load_owned_request,
+            stage_events=stage_game_story_events,
         )
     )
 

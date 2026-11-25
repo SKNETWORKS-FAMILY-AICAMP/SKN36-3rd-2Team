@@ -5,10 +5,17 @@ from dataclasses import dataclass
 
 from crimescene.retriever.graph_search import (
     CHARACTER_IDS,
-    EVIDENCE_IDS,
     is_relation_visible,
 )
 from crimescene.retriever.query_graph_retriever import QuestionGraphContext
+from crimescene.retriever.versioned_retrieval import (
+    EXPANDED_IDS,
+    evidence_ids_for_version,
+)
+from crimescene.scenario.e26_section_policy import (
+    E26_HOLDER_EDGE_ID,
+    can_access_e26_holder_edge,
+)
 from crimescene.scenario.policy_evaluator import PolicyEvaluator
 from crimescene.scenario.schemas.evidence import EvidenceRule
 from crimescene.scenario.schemas.game_state import GameState
@@ -43,7 +50,11 @@ def _entity_visible(
     if entity_id in CHARACTER_IDS:
         return entity_id in state.unlocked_characters
 
-    if entity_id in EVIDENCE_IDS:
+    if entity_id in EXPANDED_IDS:
+        if entity_id not in evidence_ids_for_version(
+            state.content_version
+        ):
+            return False
         evidence = state.evidence.get(entity_id)
 
         return (
@@ -105,6 +116,7 @@ def build_graph_rag_context(
     allowed_document_ids: Iterable[str] = (),
     max_relations: int = 20,
     max_evidence: int = 10,
+    published_holder_ids: tuple[str, ...] = (),
 ) -> GraphRagContext:
     """접근 가능한 그래프 관계를 LLM 참고 문서로 변환한다.
 
@@ -258,6 +270,22 @@ def build_graph_rag_context(
     # 2. 증거 보유 관계
     for item in graph.evidence:
         evidence_id = item.evidence_id
+
+        if state.content_version == "case001_1120":
+            if evidence_id == "E30":
+                continue
+
+            if evidence_id == "E26" and (
+                "E26" not in published_holder_ids
+                or not can_access_e26_holder_edge(
+                    state,
+                    edge_id=E26_HOLDER_EDGE_ID,
+                    character_id=graph.character_id,
+                    section_a_approved=True,
+                    graph_edge_approved=True,
+                )
+            ):
+                continue
 
         rule = evidence_rules.get(evidence_id)
 

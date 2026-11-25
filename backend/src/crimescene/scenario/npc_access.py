@@ -111,6 +111,7 @@ def select_authorized_npc_cards(
             required_topics=card.required_topics,
             required_disclosed_cards=card.required_disclosed_cards,
             required_character=card.character_id,
+            required_npc_stage=card.required_npc_stage,
         )
 
         card_evaluator = PolicyEvaluator({card.policy_id: card_policy})

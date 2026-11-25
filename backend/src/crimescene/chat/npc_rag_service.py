@@ -74,6 +74,9 @@ class NPCRAGResources:
     allowed_entity_ids: tuple[str, ...] = ()
     known_relation_ids: tuple[str, ...] = ()
     known_evidence_ids: tuple[str, ...] = ()
+    published_holder_ids: tuple[str, ...] = ()
+    content_version: str = "case001_v7_1"
+    collection_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,6 +196,9 @@ def prepare_npc_chat_rag(
     if isinstance(matched_topics, (str, bytes)):
         raise TypeError("질문 주제는 문자열 목록이어야 합니다.")
 
+    if resources.content_version != state.content_version:
+        raise PermissionError("RAG content version mismatch")
+
     topics = tuple(matched_topics)
 
     # --------------------------------------------------------
@@ -215,6 +221,11 @@ def prepare_npc_chat_rag(
     # --------------------------------------------------------
     # 4. NPC 페르소나 및 진술 규칙
     # --------------------------------------------------------
+
+    graph_options = (
+        {"published_holder_ids": resources.published_holder_ids}
+        if resources.published_holder_ids else {}
+    )
 
     social_personas = build_social_personas(
         resources.personas,
@@ -253,6 +264,12 @@ def prepare_npc_chat_rag(
         candidate_k=candidate_k,
         relation_top_k=relation_top_k,
         evidence_top_k=evidence_top_k,
+        **graph_options,
+        **(
+            {"collection_name": resources.collection_name}
+            if resources.collection_name is not None
+            else {}
+        ),
     )
 
     # --------------------------------------------------------
@@ -271,6 +288,7 @@ def prepare_npc_chat_rag(
             allowed_entity_ids=allowed_entity_ids,
             relation_top_k=relation_top_k,
             evidence_top_k=evidence_top_k,
+            **graph_options,
         )
 
         if graph_context.character_id != character_id:
@@ -304,6 +322,7 @@ def prepare_npc_chat_rag(
 
     reply_plan = prepare_npc_reply(
         question,
+        **({"published_holder_ids": resources.published_holder_ids} if resources.published_holder_ids else {}),
         candidates=candidates,
         graph_context=graph_context,
         state=state,
@@ -317,7 +336,16 @@ def prepare_npc_chat_rag(
         evaluator=resources.evaluator,
         npc_persona=system_prompt,
         known_relation_ids=resources.known_relation_ids,
-        known_evidence_ids=resources.known_evidence_ids,
+        known_evidence_ids=(
+            tuple(
+                eid for eid in resources.published_holder_ids
+                if eid not in {"E26", "E30"}
+                and resources.evidence_rules[eid].holder
+                == character_id
+            )
+            if state.content_version == "case001_1120"
+            else resources.known_evidence_ids
+        ),
         allowed_entity_ids=allowed_entity_ids,
         matched_topics=topics,
         top_k=top_k,

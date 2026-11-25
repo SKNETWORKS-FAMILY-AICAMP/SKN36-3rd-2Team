@@ -16,6 +16,7 @@ from crimescene.scenario.schemas.access_policy import AccessPolicy
 from crimescene.scenario.schemas.evidence import EvidenceRule
 from crimescene.scenario.schemas.game_state import GameState
 from crimescene.trigger.evidence_presentation import process_npc_dialogue_event
+from crimescene.trigger.npc_stage_rules import PresentationStageRule
 from crimescene.trigger.npc_trigger import NPCTriggerRule
 
 
@@ -109,6 +110,7 @@ def run_case001_npc_dialogue(
     trigger_rules: Iterable[NPCTriggerRule],
     presented_evidence_id: str | None = None,
     flag_config: Case001UnlockRules | None = None,
+    presentation_stage_rules: tuple[PresentationStageRule, ...] = (),
 ) -> Case001DialogueResult:
     """증거 제시 → 승인된 트리거 → 기존 보안 RAG → 실제 인용 카드 기록.
 
@@ -139,6 +141,11 @@ def run_case001_npc_dialogue(
     )
 
     # 증거 제시와 질문 트리거를 적용한다.
+    stage_options = (
+        {"presentation_stage_rules": presentation_stage_rules}
+        if presentation_stage_rules else {}
+    )
+
     event = process_npc_dialogue_event(
         question,
         state=state,
@@ -148,6 +155,7 @@ def run_case001_npc_dialogue(
         evidence_rules=resources.evidence_rules,
         allowed_recipients=recipients,
         presented_evidence_id=presented_evidence_id,
+        **stage_options,
         flag_config=flag_config,  # 추가
     )
 

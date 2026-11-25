@@ -383,6 +383,8 @@ class DjangoContentClient:
         self,
         case_id: str,
         scene_id: str,
+        *,
+        investigation_release: str | None = None,
     ) -> PlayerScene:
         """승인된 플레이어용 Scene을 Django에서 조회합니다."""
 
@@ -392,7 +394,23 @@ class DjangoContentClient:
         if not isinstance(scene_id, str) or not re.fullmatch(r"SC-\d{4}", scene_id):
             raise ValueError("올바르지 않은 장면 ID입니다.")
 
-        path = f"api/content/internal/cases/{case_id}/scenes/{scene_id}/"
+        if investigation_release is None:
+            path = (
+                f"api/content/internal/cases/"
+                f"{case_id}/scenes/{scene_id}/"
+            )
+        else:
+            if not re.fullmatch(
+                r"v\d+\.\d+\.\d+",
+                investigation_release,
+            ):
+                raise ValueError("Invalid release version")
+
+            path = (
+                f"api/content/internal/cases/{case_id}/"
+                f"releases/{investigation_release}/"
+                f"investigation-scenes/{scene_id}/"
+            )
 
         try:
             response = self._client.get(path)

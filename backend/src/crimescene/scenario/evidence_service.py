@@ -3,6 +3,7 @@
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
+from crimescene.scenario.acquisition_policy import AcquisitionPolicy
 from crimescene.scenario.evidence_collection import (
     CollectionProgress,
     collect_evidence,
@@ -39,6 +40,7 @@ def collect_evidence_atomic(
     unlock_rules: Mapping[str, NPCUnlockRule],
     django_prerequisites: tuple[str, ...] = (),
     stage_events: Callable[[GameState], GameState] | None = None,
+    approved_routes: Mapping[str, AcquisitionPolicy] | None = None,
 ) -> EvidenceServiceResult:
     """증거 획득과 NPC 해금을 검증 후 한 번에 저장합니다."""
 
@@ -85,6 +87,7 @@ def collect_evidence_atomic(
         acquisition_policy_ids=acquisition_policy_ids,
         evaluator=evaluator,
         active_character_id=active_character_id,
+        approved_routes=approved_routes,
     )
 
     # 중복 수집은 상태와 revision을 변경하지 않습니다.

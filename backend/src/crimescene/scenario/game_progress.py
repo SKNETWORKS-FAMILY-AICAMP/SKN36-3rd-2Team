@@ -1,6 +1,14 @@
 """Issue #27 - 게임 초기화 및 진행 단계 관리."""
 
-from crimescene.scenario.schemas.game_state import GamePhase, GameState
+from collections.abc import Mapping
+
+from crimescene.scenario.evidence_collection import get_collection_progress
+from crimescene.scenario.schemas.evidence import EvidenceRule
+from crimescene.scenario.schemas.game_state import (
+    ContentVersion,
+    GamePhase,
+    GameState,
+)
 
 CASE_ID = "CASE-001"
 INITIAL_NPC = "C01"
@@ -20,8 +28,12 @@ EXPECTED_EVIDENCE_IDS = frozenset(f"E{i:02d}" for i in range(1, 11))
 VALID_EVIDENCE_STAGES = frozenset({"found", "resolved"})
 MIN_EVIDENCE_COUNT = 5
 
+EXPANDED_EVIDENCE_IDS = frozenset(
+    f"E{i:02d}" for i in range(1, 31)
+)
 
-def meets_accusation_requirements(state: GameState) -> bool:
+
+def _legacy_accusation_requirements(state: GameState) -> bool:
     """CASE-001 범인 지목 최소 조건을 검증합니다."""
 
     collected_count = sum(
@@ -33,7 +45,50 @@ def meets_accusation_requirements(state: GameState) -> bool:
     return collected_count >= MIN_EVIDENCE_COUNT and state.score >= ACCUSE_THRESHOLD
 
 
-def create_initial_state(session_id: str) -> GameState:
+def meets_accusation_requirements(
+    state: GameState,
+    evidence_rules: Mapping[str, EvidenceRule] | None = None,
+) -> bool:
+    """Evaluate accusation requirements from a trusted catalog."""
+
+    # Preserve existing callers without a loaded catalog.
+    if evidence_rules is None:
+        return _legacy_accusation_requirements(state)
+
+    ids = frozenset(evidence_rules)
+
+    if ids not in {
+        EXPECTED_EVIDENCE_IDS,
+        EXPANDED_EVIDENCE_IDS,
+    }:
+        raise ValueError("Invalid evidence catalog")
+
+    progress = get_collection_progress(state, evidence_rules)
+
+    if state.score != progress.score:
+        raise ValueError("Evidence score integrity mismatch")
+
+    if ids == EXPECTED_EVIDENCE_IDS:
+        if progress.total != 21:
+            raise ValueError("Invalid legacy evidence score")
+
+        return _legacy_accusation_requirements(state)
+
+    if any(rule.score <= 0 for rule in evidence_rules.values()):
+        raise ValueError("Expanded evidence scores must be positive")
+
+    # Provisional policy: at least 50% of evidence and total score.
+    return (
+        progress.collected_count * 2 >= progress.total_count
+        and progress.score * 2 >= progress.total
+    )
+
+
+def create_initial_state(
+    session_id: str,
+    *,
+    content_version: ContentVersion = "case001_v7_1",
+) -> GameState:
     """새 게임의 서버 관리 초기 상태를 생성합니다."""
 
     if not isinstance(session_id, str):
@@ -45,6 +100,7 @@ def create_initial_state(session_id: str) -> GameState:
     return GameState(
         case_id=CASE_ID,
         session_id=session_id,
+        content_version=content_version,
         phase=GamePhase.PROLOGUE,
         unlocked_characters=[INITIAL_NPC],
         evidence={},
@@ -63,6 +119,8 @@ def create_initial_state(session_id: str) -> GameState:
 def transition_phase(
     state: GameState,
     target: GamePhase,
+    *,
+    evidence_rules: Mapping[str, EvidenceRule] | None = None,
 ) -> GameState:
     """진행 단계 전환을 검증하고 새로운 GameState를 반환합니다."""
 
@@ -84,7 +142,7 @@ def transition_phase(
     # 지목 화면 진입 조건입니다.
     # 실제 지목 판정과 기회 차감은 #29에서 구현합니다.
     if target == GamePhase.ACCUSATION:
-        if not meets_accusation_requirements(state):
+        if not meets_accusation_requirements(state, evidence_rules):
             raise PermissionError("증거 5개 이상 및 수집 점수 11점 이상이 필요합니다.")
 
         if state.attempts_left <= 0:

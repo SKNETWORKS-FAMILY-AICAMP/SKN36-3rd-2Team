@@ -71,6 +71,20 @@ def matches_story_event_prerequisites(
 ) -> bool:
     """Evaluate server-owned gameplay state without mutating it."""
 
+    # STORY_026 requires the exact section-A inference contract.
+    if conditions.story_id == "STORY_026":
+        if (
+            state.content_version != "case001_1120"
+            or conditions.chapter != "CH03"
+            or conditions.all_evidence != frozenset({"E20", "E26"})
+            or conditions.any_evidence
+            or conditions.required_flags != frozenset({
+                "ACT_AUDIT_LOG_ACCESS_VERIFIED",
+                "INF_POST_EVENT_DELETE",
+            })
+        ):
+            return False
+
     if state.case_id != "CASE-001":
         return False
 

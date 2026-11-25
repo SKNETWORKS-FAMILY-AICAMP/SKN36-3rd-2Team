@@ -67,6 +67,7 @@ def _blocked_plan() -> NPCReplyPlan:
 def prepare_npc_reply(
     query: str,
     *,
+    published_holder_ids: tuple[str, ...] = (),
     candidates: Sequence[FusedSearchCandidate],
     graph_context: QuestionGraphContext,
     state: GameState,
@@ -163,6 +164,7 @@ def prepare_npc_reply(
 
     authorized = build_authorized_multisource_context(
         filtered.candidates,
+        **({"published_holder_ids": published_holder_ids} if published_holder_ids else {}),
         trusted_records=trusted_records,
         documents=documents,
         npc_cards=npc_cards,

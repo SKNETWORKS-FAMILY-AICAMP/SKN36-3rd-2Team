@@ -25,6 +25,11 @@ from crimescene.trigger.case001_dialogue import (
     run_case001_npc_dialogue,
 )
 from crimescene.trigger.dialogue_lock import exclusive_per_session
+from crimescene.trigger.expanded_dialogue import (
+    ReviewedDialogueBinding,
+    apply_reviewed_dialogue,
+)
+from crimescene.trigger.npc_stage_rules import PresentationStageRule
 from crimescene.trigger.npc_trigger import NPCTriggerRule
 
 
@@ -138,6 +143,7 @@ class SQLiteCase001Repository(SQLiteNPCSessionRepository):
             expected_state.case_id != "CASE-001"
             or updated_state.case_id != expected_state.case_id
             or updated_state.session_id != expected_state.session_id
+            or updated_state.content_version != expected_state.content_version
         ):
             raise ValueError("사건 또는 세션 정보가 일치하지 않습니다.")
 
@@ -341,6 +347,7 @@ class SQLiteCase001Repository(SQLiteNPCSessionRepository):
             expected_state.case_id != "CASE-001"
             or updated_state.case_id != expected_state.case_id
             or updated_state.session_id != expected_state.session_id
+            or updated_state.content_version != expected_state.content_version
             or updated_state.revision < expected_state.revision
         ):
             raise ValueError("게임 상태의 사건·세션·revision이 잘못됐습니다.")
@@ -598,6 +605,9 @@ def run_case001_npc_dialogue_atomic(
     presented_evidence_id: str | None = None,
     flag_config: Case001UnlockRules | None = None,
     stage_events: Callable[[GameState], GameState] | None = None,
+    npc_acquisition: Callable[..., GameState] | None = None,
+    reviewed_dialogue_bindings: tuple[ReviewedDialogueBinding, ...] = (),
+    presentation_stage_rules: tuple[PresentationStageRule, ...] = (),
 ) -> Case001DialogueResult:
     """DB에서 신뢰 상태를 읽고 NPC 대화와 GameState를 원자적으로 저장한다."""
 
@@ -615,6 +625,11 @@ def run_case001_npc_dialogue_atomic(
     # 기존 #24 테스트의 모킹 함수와 호환성을 유지합니다.
     flag_options = {"flag_config": flag_config} if flag_config is not None else {}
 
+    if presentation_stage_rules:
+        flag_options["presentation_stage_rules"] = (
+            presentation_stage_rules
+        )
+
     result = run_case001_npc_dialogue(
         question,
         state=state,
@@ -631,6 +646,20 @@ def run_case001_npc_dialogue_atomic(
 
     # 검증된 NPC 대화 결과를 기준으로 이벤트 큐를 평가합니다.
     updated = result.state
+
+    if reviewed_dialogue_bindings:
+        updated = apply_reviewed_dialogue(
+            updated,
+            active_character_id=result.turn.character_id,
+            trigger_ids=result.trigger_ids,
+            source_ids=result.turn.reply.source_ids,
+            grounded=result.turn.reply.grounded,
+            presented_evidence_id=presented_evidence_id,
+            bindings=reviewed_dialogue_bindings,
+        )
+
+    if npc_acquisition is not None:
+        updated = npc_acquisition(updated, result.turn)
 
     if stage_events is not None:
         updated = stage_events(updated)

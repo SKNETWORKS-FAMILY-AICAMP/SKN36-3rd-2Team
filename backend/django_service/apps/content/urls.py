@@ -55,3 +55,26 @@ urlpatterns = [
     ),
 
 ]
+
+
+from .release_views import InternalContentReleaseView
+
+urlpatterns += [
+    path(
+        "internal/cases/<str:case_id>/releases/<str:version>/",
+        InternalContentReleaseView.as_view(),
+        name="internal-content-release",
+    ),
+]
+
+
+from .release_views import InternalInvestigationSceneView
+
+urlpatterns += [
+    path(
+        "internal/cases/<str:case_id>/releases/"
+        "<str:version>/investigation-scenes/<str:scene_id>/",
+        InternalInvestigationSceneView.as_view(),
+        name="internal-investigation-scene",
+    ),
+]

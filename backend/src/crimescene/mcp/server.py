@@ -26,11 +26,11 @@ from crimescene.mcp.npc_tools import (
 from crimescene.retriever.authorized_hybrid_search import (
     search_authorized_hybrid_context,
 )
-from crimescene.scenario.evidence_collection import get_collection_progress
-from crimescene.scenario.game_progress import (
-    EXPECTED_EVIDENCE_IDS,
-    meets_accusation_requirements,
+from crimescene.retriever.versioned_retrieval import (
+    validate_catalog_version,
 )
+from crimescene.scenario.evidence_collection import get_collection_progress
+from crimescene.scenario.game_progress import meets_accusation_requirements
 from crimescene.scenario.policy_evaluator import PolicyEvaluator
 from crimescene.scenario.schemas.evidence import EvidenceRule
 from crimescene.scenario.schemas.game_state import GamePhase
@@ -71,16 +71,27 @@ def create_readonly_mcp_server(
     if not isinstance(evidence_rules, Mapping) or not evidence_rules:
         raise ValueError("서버 증거 규칙이 필요합니다.")
 
+    validate_catalog_version(
+        context.content_version,
+        evidence_rules,
+    )
+
     rules: dict[str, EvidenceRule] = {}
 
     for evidence_id, rule in evidence_rules.items():
-        if evidence_id not in EXPECTED_EVIDENCE_IDS:
-            raise ValueError("지원하지 않는 증거 ID입니다.")
+        if not isinstance(evidence_id, str):
+            raise TypeError("지원하지 않는 증거 ID입니다.")
 
         if not isinstance(rule, EvidenceRule):
             raise TypeError("증거 규칙 타입이 올바르지 않습니다.")
 
         rules[evidence_id] = rule.model_copy(deep=True)
+
+    if (
+        isinstance(rag_resources, NPCRAGResources)
+        and rag_resources.content_version != context.content_version
+    ):
+        raise ValueError("MCP RAG content version mismatch")
 
     server = MCPServer("CASE-001 Readonly MCP")
 
@@ -130,7 +141,11 @@ def create_readonly_mcp_server(
                 state.phase == GamePhase.INVESTIGATION
                 and state.outcome in (None, "ONGOING")
                 and state.attempts_left > 0
-                and meets_accusation_requirements(state)
+                and meets_accusation_requirements(
+                    state,
+                    rules if state.content_version == "case001_1120"
+                    else None,
+                )
             ),
         }
 
@@ -220,9 +235,15 @@ def create_readonly_mcp_server(
             active_character_id=None,
             candidate_k=30,
             top_k=20,
+            **(
+                {"collection_name": getattr(rag_resources, "collection_name", None)}
+                if getattr(rag_resources, "collection_name", None) is not None
+                else {}
+            ),
         )
 
         payload = select_mcp_evidence_results(
+            evaluator=evaluator,
             state=state,
             chunks=chunks,
             documents=rag_resources.documents,

@@ -97,6 +97,10 @@ class BoundMCPContext:
         return state.model_copy(deep=True)
 
     @property
+    def content_version(self) -> str:
+        return self._snapshot.content_version
+
+    @property
     def active_character_id(self) -> str | None:
         """서버가 검증한 현재 NPC 식별자입니다."""
         return self._snapshot.active_character_id

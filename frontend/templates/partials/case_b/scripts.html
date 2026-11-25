@@ -1,0 +1,24 @@
+{% load static %}
+{# B 스크립트. play.html 맨 아래에서 include. common/api.js(·store.js)는 A의 base.html이 먼저 불러온다는 전제 #}
+<link rel="stylesheet" href="{% static 'case_b/css/b.css' %}">
+<script src="{% static 'case_b/js/b-config.js' %}"></script>
+<script>
+  // Django 경로로 덮어쓰기
+  B.config.IMG_BASE = "{% static 'assets/' %}";   {# frontend/public 을 정적 폴더로 등록한다는 전제(백엔드 협의) #}
+  B.config.HOME_URL = "/";            {# named URL이 정해지면 {% url '...' %}로 바꿈 #}
+  B.config.USE_MOCK = false;          {# 실제 화면은 모의 응답을 쓰지 않음 #}
+</script>
+<script src="{% static 'case_b/js/b-roster.js' %}"></script>
+<script src="{% static 'case_b/js/b-ui.js' %}"></script>
+<script src="{% static 'case_b/js/b-store.js' %}"></script>
+<script src="{% static 'case_b/js/b-api.js' %}"></script>
+<script src="{% static 'case_b/js/b-interview.js' %}"></script>
+<script src="{% static 'case_b/js/b-evidence.js' %}"></script>
+<script src="{% static 'case_b/js/b-relations.js' %}"></script>
+<script src="{% static 'case_b/js/b-records.js' %}"></script>
+<script src="{% static 'case_b/js/b-accuse.js' %}"></script>
+<script src="{% static 'case_b/js/b-ending.js' %}"></script>
+<script src="{% static 'case_b/js/b-events.js' %}"></script>
+<script src="{% static 'case_b/js/b-consent.js' %}"></script>
+<script src="{% static 'case_b/js/b-main.js' %}"></script>
+{# dev/b-mock.js 는 여기에 넣지 않습니다(배포본에 가상 데이터 금지) #}

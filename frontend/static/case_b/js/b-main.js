@@ -36,6 +36,14 @@ window.B = window.B || {};
       : B.api.createGame();
 
     getSession.then(function (g) {
+      // 프롤로그 상태면 조사 단계로 넘깁니다. A 오프닝과 붙인 뒤에는
+      // A가 먼저 부르므로 여기서는 PROLOGUE가 아닐 때 그냥 지나갑니다.
+      if (g.phase === 'PROLOGUE' && B.config.AUTO_PROLOGUE) {
+        S.game.sessionId = g.sessionId;
+        return B.api.completePrologue();
+      }
+      return g;
+    }).then(function (g) {
       S.setGame(g);
       try { localStorage.setItem(SESSION_KEY, g.sessionId); } catch (e) { /* 무시 */ }
       return B.evidence.refresh();

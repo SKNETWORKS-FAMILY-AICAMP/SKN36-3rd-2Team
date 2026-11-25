@@ -10,10 +10,8 @@ B.ending = (function () {
   var esc = B.esc, $ = B.$;
 
   // 엔딩 종류별 도장 글자(판정 이름만 표시)
-  var STAMP = {
-    FULL: '사건 해결', DEEP: '사건 해결', ESTIMATED: '추정 성립',
-    UNSOLVED: '수사 실패', NO_EVIDENCE: '수사 중단'
-  };
+  // 서버(app.py get_ending)가 보내는 결과: SUCCESS / FAILURE
+  var STAMP = { SUCCESS: '사건 해결', FAILURE: '미해결 사건' };
 
   function show() {
     B.api.ending().then(draw).catch(function (e) { B.toast(e.message); });
@@ -29,7 +27,7 @@ B.ending = (function () {
     var t = r.truth;
     el.innerHTML =
       '<div class="b-ending-card">' +
-      '  <div class="b-stamp ' + (r.outcome === 'FULL' || r.outcome === 'DEEP' ? 'ok' : '') + '">' + esc(STAMP[r.outcome] || r.outcome || '') + '</div>' +
+      '  <div class="b-stamp ' + (r.outcome === 'SUCCESS' ? 'ok' : '') + '">' + esc(STAMP[r.outcome] || r.outcome || '') + '</div>' +
       '  <h2>' + esc(r.title || '') + '</h2>' +
       '  <p class="b-ending-msg">' + esc(r.message || '') + '</p>' +
       // 사건 정리는 서버가 보냈을 때만 보여 줍니다(게임이 끝난 뒤에만 옴).

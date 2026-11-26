@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Navigate, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
-import { FileSearch, Lock, NotebookPen, Send, X } from 'lucide-react'
+import { FileSearch, Lightbulb, Lock, NotebookPen, Send, X } from 'lucide-react'
 
 import Objective from '../../components/Objective'
 import TopNav from '../../components/TopNav'
@@ -56,6 +56,22 @@ export default function Chat() {
   const [pickOpen, setPickOpen] = useState(false)
   // 제시할 증거: 고르면 입력창 위에 표시되고, 다음 전송 때 질문과 함께 보낸다
   const [picked, setPicked] = useState<string | null>(null)
+  // 힌트 1단계: 서버가 준 문장을 입력창 위에 보여 준다
+  const [hint, setHint] = useState<{ text: string; error?: boolean } | null>(null)
+  const [hintBusy, setHintBusy] = useState(false)
+  const askHint = async () => {
+    if (!session || hintBusy) return
+    setHintBusy(true)
+    const fail = { text: '지금은 힌트를 볼 수 없습니다. 조사 중일 때 다시 눌러 보세요.', error: true }
+    try {
+      const text = await api.getHint(session.sessionId)
+      setHint(text ? { text } : fail)
+    } catch {
+      setHint(fail)
+    } finally {
+      setHintBusy(false)
+    }
+  }
   const [available, setAvailable] = useState<AvailableEvidence[]>([])
   const [collecting, setCollecting] = useState<string | null>(null)
   const collectingRef = useRef(false)
@@ -608,6 +624,13 @@ export default function Chat() {
               submit()
             }}
           >
+            {hint && (
+              <p className={`${styles.picked} ${styles.hintBox}`} role="status" data-tutorial="interview-hint-text">
+                <Lightbulb size={14} />
+                <span className={hint.error ? undefined : styles.hintText}>{hint.text}</span>
+                <button type="button" onClick={() => setHint(null)} aria-label="힌트 닫기"><X size={14} /></button>
+              </p>
+            )}
             {picked && (
               <p className={styles.picked} data-tutorial="interview-picked">
                 <FileSearch size={14} />
@@ -637,6 +660,17 @@ export default function Chat() {
             >
               <NotebookPen size={16} />
               추리 노트
+            </button>
+
+            <button
+              type="button"
+              className="btn"
+              onClick={() => void askHint()}
+              disabled={hintBusy}
+              data-tutorial="interview-hint"
+            >
+              <Lightbulb size={16} />
+              {hintBusy ? '힌트 찾는 중…' : '힌트'}
             </button>
 
             {/* Issue #59: 최대 200자 입력창 */}

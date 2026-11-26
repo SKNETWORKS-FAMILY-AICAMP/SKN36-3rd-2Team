@@ -28,7 +28,7 @@ li:nth-child(even) .polaroid { transform: rotate(1.4deg); }
 .info dd { margin: 0; color: var(--paper-200); }
 
 /* 우측 메신저 */
-.chat { display: flex; flex-direction: column; min-height: 0; background: rgba(10,9,8,.55); }
+.chat { display: flex; flex-direction: column; min-height: 0; background: transparent; }
 .list { flex: 1; overflow-y: auto; padding: 22px 28px; display: flex; flex-direction: column; gap: 14px; }
 .hint { margin: auto; max-width: 340px; text-align: center; color: var(--paper-400); font-size: 14px; }
 .msg { display: flex; gap: 10px; align-items: flex-start; max-width: 100%; }
@@ -100,7 +100,7 @@ li:nth-child(even) .polaroid { transform: rotate(1.4deg); }
 
 .messageField {
   position: relative;
-  flex: 1 1 240px;
+  flex: 1 1 calc(100% - 52px); /* 버튼 줄 아래에 입력창+보내기 버튼을 한 줄로 */
   min-width: 0;
 }
 
@@ -138,3 +138,7 @@ li:nth-child(even) .polaroid { transform: rotate(1.4deg); }
 .picked b { color: var(--brass-400); font-weight: 600; }
 .picked span { color: var(--paper-400); }
 .picked button { margin-left: auto; display: grid; place-items: center; color: var(--paper-300); background: none; border: 0; cursor: pointer; }
+
+/* 힌트 1단계 (제시할 증거 표시와 같은 모양, 색만 다르게) */
+.hintBox { border-left-color: var(--paper-300); }
+.picked .hintText { color: var(--paper-100); line-height: 1.6; }

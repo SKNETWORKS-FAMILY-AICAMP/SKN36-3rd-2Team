@@ -384,3 +384,171 @@ def test_different_question_does_not_repeat_same_reply(environment):
     history = store.get_history(state, "C01")
     assert len(history) == 2
     assert history[-1].npc_message == FALLBACK_REPLY
+
+
+# Issue #171 - expanded persona and retry integration
+
+
+def test_expanded_runtime_uses_persona_and_intent(environment):
+    state, _, prepare_mock = environment
+
+    state = state.model_copy(
+        update={"content_version": "case001_1120"}
+    )
+
+    store = NPCSessionStore()
+    store.select_npc(state, "C01")
+
+    generate = MagicMock(
+        return_value=valid_llm_output()
+    )
+
+    turn = module.run_npc_chat(
+        QUESTION,
+        state=state,
+        session_store=store,
+        resources=None,
+        generate=generate,
+    )
+
+    assert turn.reply.grounded is True
+    assert turn.reply.source_ids == (SOURCE_ID,)
+    assert QUOTE in turn.display_text
+    assert turn.display_text.startswith(
+        "이 부분부터 말씀드리겠습니다."
+    )
+
+    history = store.get_history(state, "C01")
+
+    assert history[-1].npc_message == turn.reply.text
+    assert history[-1].npc_message != turn.display_text
+
+    messages = generate.call_args.args[0]
+    system_prompt = messages[0]["content"]
+
+    assert "[DYNAMIC NPC PERSONA]" in system_prompt
+    assert "[NPC DIALOGUE INTENT]" in system_prompt
+
+    generate.assert_called_once()
+    prepare_mock.assert_called_once()
+
+
+def test_expanded_runtime_skips_explicit_empty_retry(environment):
+    state, _, _ = environment
+
+    state = state.model_copy(
+        update={"content_version": "case001_1120"}
+    )
+
+    store = NPCSessionStore()
+    store.select_npc(state, "C01")
+
+    generate = MagicMock(
+        side_effect=[
+            '{"quotes": []}',
+            valid_llm_output(),
+        ]
+    )
+
+    turn = module.run_npc_chat(
+        QUESTION,
+        state=state,
+        session_store=store,
+        resources=None,
+        generate=generate,
+    )
+
+    assert turn.reply.grounded is False
+    assert turn.reply.source_ids == ()
+    assert turn.display_text == FALLBACK_REPLY
+
+    generate.assert_called_once()
+
+
+def test_legacy_runtime_still_retries_empty_quotes(environment):
+    state, store, _ = environment
+
+    generate = MagicMock(
+        side_effect=[
+            '{"quotes": []}',
+            valid_llm_output(),
+        ]
+    )
+
+    turn = module.run_npc_chat(
+        QUESTION,
+        state=state,
+        session_store=store,
+        resources=None,
+        generate=generate,
+    )
+
+    assert turn.reply.grounded is True
+    assert generate.call_count == 2
+    assert turn.display_text == QUOTE
+
+
+def test_expanded_invalid_json_still_retries(environment):
+    state, _, _ = environment
+
+    state = state.model_copy(
+        update={"content_version": "case001_1120"}
+    )
+
+    store = NPCSessionStore()
+    store.select_npc(state, "C01")
+
+    generate = MagicMock(
+        side_effect=[
+            "INVALID JSON",
+            valid_llm_output(),
+        ]
+    )
+
+    turn = module.run_npc_chat(
+        QUESTION,
+        state=state,
+        session_store=store,
+        resources=None,
+        generate=generate,
+    )
+
+    assert turn.reply.grounded is True
+    assert generate.call_count == 2
+
+
+def test_expanded_unapproved_source_still_blocked(environment):
+    state, _, _ = environment
+
+    state = state.model_copy(
+        update={"content_version": "case001_1120"}
+    )
+
+    store = NPCSessionStore()
+    store.select_npc(state, "C01")
+
+    generate = MagicMock(
+        return_value=json.dumps({
+            "quotes": [
+                {
+                    "source_id": "ADMIN-SECRET",
+                    "quote": "PRIVATE_SECRET_SENTINEL",
+                }
+            ]
+        })
+    )
+
+    turn = module.run_npc_chat(
+        QUESTION,
+        state=state,
+        session_store=store,
+        resources=None,
+        generate=generate,
+    )
+
+    assert turn.reply.grounded is False
+    assert turn.reply.source_ids == ()
+    assert turn.display_text == FALLBACK_REPLY
+    assert "PRIVATE_SECRET_SENTINEL" not in turn.display_text
+
+    assert generate.call_count == 2

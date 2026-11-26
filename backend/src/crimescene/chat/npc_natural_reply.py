@@ -1,6 +1,7 @@
 """Issue #25 - 검증된 NPC 진술의 안전한 화면 출력."""
 
 import re
+from types import MappingProxyType
 
 from crimescene.chat.npc_reaction import NPCReaction
 from crimescene.retriever.authorized_multisource_context import (
@@ -54,11 +55,27 @@ NEW_EVIDENCE_OPENERS = {
 }
 
 
+# Style-only expressions; no new case facts or personal memories.
+EXPANDED_NEUTRAL_OPENERS = MappingProxyType({
+    "C01": "이 부분부터 말씀드리겠습니다.",
+    "C02": "핵심만 말씀드리죠.",
+    "C03": "그러니까, 이 부분입니다.",
+    "C04": "이 부분입니다.",
+    "C05": "내용을 구분해서 말씀드리겠습니다.",
+    "C06": "차근차근 말씀드리자면요.",
+    "C07": "아, 이 부분부터 말씀드릴게요.",
+    "C08": "필요한 부분만 이야기하죠.",
+    "C09": "이 부분을 말씀드리겠습니다.",
+    "C10": "요점은 이렇습니다.",
+})
+
+
 def render_npc_speech(
     reply: NPCGroundedReply,
     *,
     context: AuthorizedMultisourceContext,
     reaction: NPCReaction,
+    expanded_persona: bool = False,
 ) -> str:
     """승인된 인용문을 NPC의 화면용 대화로 변환합니다.
 
@@ -74,6 +91,9 @@ def render_npc_speech(
 
     if not isinstance(reaction, NPCReaction):
         raise TypeError("NPCReaction이 필요합니다.")
+
+    if type(expanded_persona) is not bool:
+        raise TypeError("Invalid expanded persona option")
 
     if reaction.character_id not in NPC_OPENERS:
         raise ValueError("지원하지 않는 NPC입니다.")
@@ -131,6 +151,9 @@ def render_npc_speech(
     elif reaction.mode == "repeated":
         opener = REPEATED_OPENERS[reaction.character_id]
 
+    elif expanded_persona:
+        opener = EXPANDED_NEUTRAL_OPENERS[reaction.character_id]
+
     else:
         opener = NPC_OPENERS[reaction.character_id]
 
@@ -139,6 +162,11 @@ def render_npc_speech(
     if opener:
         parts.append(opener)
 
-    parts.extend(verified_quotes)
+    if expanded_persona:
+        # Keep third-person source material recognizable as quotations.
+        # Never turn it into the current NPC's personal experience.
+        parts.extend(f"“{quote}”" for quote in verified_quotes)
+    else:
+        parts.extend(verified_quotes)
 
     return "\n".join(parts)

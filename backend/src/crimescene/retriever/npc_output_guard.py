@@ -344,6 +344,7 @@ def run_grounded_npc_response(
     authorized_context: AuthorizedMultisourceContext,
     *,
     generate: Callable[[list[dict[str, str]]], str],
+    retry_empty_quotes: bool = True,
 ) -> NPCGroundedReply:
     """LLM 인용 검증 및 최대 1회 재시도."""
 
@@ -358,6 +359,9 @@ def run_grounded_npc_response(
 
     if not callable(generate):
         raise TypeError("LLM 생성 함수가 필요합니다.")
+
+    if type(retry_empty_quotes) is not bool:
+        raise TypeError("Invalid empty quote retry policy")
 
     # 1. LLM 입력과 접근 승인 근거 일치 검사
     if not _is_plan_bound_to_context(
@@ -386,6 +390,11 @@ def run_grounded_npc_response(
             raw_output,
             authorized_context,
         )
+
+        # An explicit empty result is not a malformed response.
+        if reason == "EMPTY_QUOTES" and not retry_empty_quotes:
+            logger.info("NPC_EMPTY_QUOTES_RETRY_SKIPPED")
+            return _fallback()
 
         logger.warning(
             "NPC 인용 검증 실패: %s / 재시도 1회",

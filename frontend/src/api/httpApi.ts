@@ -584,6 +584,14 @@ export const httpApi: GameApi = {
     return endingToResponse(ending, game.attemptsLeft)
   },
 
+  // 엔딩 이미지 (게임 종료 후에만). 서버가 확정한 엔딩의 이미지만 순서대로 준다. url은 /api부터 시작하는 경로라 API 서버 주소와 합친다.
+  getEndingImages: async (sessionId: string): Promise<string[]> => {
+    const res = await request<{ images?: { index: number; url: string }[] }>(`${gamePath(sessionId)}/ending/images`)
+    return (res.images ?? [])
+      .sort((a, b) => a.index - b.index)
+      .map((image) => (/^https?:/.test(BASE) ? new URL(image.url, BASE).href : image.url))
+  },
+
   // 사건 재구성 (확장판 서버 전용). 정답 여부는 서버만 판정하고 accepted로만 알려 준다.
   reconstruct: async (sessionId: string, selections: ReconstructionSelections): Promise<boolean> => {
     const path = gamePath(sessionId)

@@ -18,6 +18,8 @@ export interface GameApi {
   getEnding(sessionId: string): Promise<EndingDetails>
   giveUp(sessionId: string): Promise<AccuseResponse>
   reconstruct(sessionId: string, selections: ReconstructionSelections): Promise<boolean>
+  /** 엔딩 이미지 주소 목록(게임 종료 후). 이미지 없는 엔딩은 빈 배열 */
+  getEndingImages(sessionId: string): Promise<string[]>
 }
 
 export const api: GameApi = httpApi

@@ -20,6 +20,7 @@ import {
   NOTE_SECTIONS,
   useNoteStore,
 } from '../../store/noteStore'
+import { api } from '../../api/client'
 import type { EvidenceDetail } from '../../api/types'
 import styles from './Final.module.css'
 
@@ -316,6 +317,9 @@ export default function Final() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [step, setStep] = useState(0)
   const [restoredSession, setRestoredSession] = useState<string | null>(null)
+  // 서버 엔딩 이미지(심화·수사 실패만 있음). 못 받으면 빈 배열로 두고 기존 화면만 보여 준다
+  const [endingImages, setEndingImages] = useState<string[]>([])
+  const [imageIdx, setImageIdx] = useState(0)
 
   useEffect(() => {
     void ensure().catch((error: unknown) => {
@@ -342,6 +346,16 @@ export default function Final() {
     setStep(loadEndingStep(sessionId, scenes.length))
     setRestoredSession(sessionId)
   }, [final?.sessionId, sessionId, scenes.length])
+
+  // 결과 화면에 들어오면 세션당 한 번만 받는다 (엔딩 기록이 다시 저장돼도 보던 이미지가 처음으로 돌아가지 않게)
+  const onResult = !!final && restoredSession === sessionId && step >= scenes.length
+  useEffect(() => {
+    if (!onResult) return
+    let alive = true
+    setImageIdx(0)
+    api.getEndingImages(sessionId).then((urls) => { if (alive) setEndingImages(urls) }, () => { if (alive) setEndingImages([]) })
+    return () => { alive = false }
+  }, [onResult, sessionId])
 
   useEffect(() => {
     if (!final || restoredSession !== sessionId || step < scenes.length) return
@@ -523,6 +537,14 @@ export default function Final() {
           CASE 001 · 마지막 기록: 졸업하지 못한 밤
         </p>
 
+        {endingImages[imageIdx] && (
+          <figure className={styles.endingArt}>
+            <img key={endingImages[imageIdx]} src={endingImages[imageIdx]} alt="" onError={() => setEndingImages([])} />
+            {imageIdx < endingImages.length - 1 && (
+              <button type="button" className="btn" onClick={() => setImageIdx((i) => i + 1)}>다음 장면</button>
+            )}
+          </figure>
+        )}
         <img style={{width: '100%', maxHeight: '42vh', objectFit: 'contain'}} src={import.meta.env.BASE_URL + cardPath(endingKeyOf(response))} alt={ending.title} />
         <h1 className="serif">{ending.title}</h1>
         <section><h2>놓친 단서</h2><p>{evidenceSlots(session?.evidenceTotal).filter(id => !session?.foundEvidence.includes(id)).join(' · ') || '모든 단서를 확보했습니다.'}</p></section>

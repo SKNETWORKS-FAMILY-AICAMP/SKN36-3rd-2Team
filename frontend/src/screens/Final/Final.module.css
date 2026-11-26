@@ -208,3 +208,8 @@
     transition: none;
   }
 }
+
+/* 서버 엔딩 이미지 (엔딩 카드 위) */
+.endingArt { margin: 18px 0 8px; display: grid; justify-items: center; gap: 12px; }
+.endingArt img { width: 100%; max-height: 52vh; object-fit: contain; box-shadow: var(--shadow-deep); }
+.endingArt :global(.btn) { margin-top: 0; }

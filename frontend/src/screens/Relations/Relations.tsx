@@ -19,6 +19,7 @@ import {
 
 import { useGameStore } from '../../store/gameStore'
 import styles from './Relations.module.css'
+import type { EmbedProps } from '../embed'
 
 // 피해자 정보
 const VICTIM_ID = 'V01' as const
@@ -55,7 +56,7 @@ type SelectedId = CharacterId | typeof VICTIM_ID
 const hasBoardPosition = (id: string): boolean =>
   Object.prototype.hasOwnProperty.call(BOARD_COORDS, id)
 
-export default function Relations() {
+export default function Relations({ embedded = false, onNpcSelect }: EmbedProps = {}) {
   const navigate = useNavigate()
 
   const session = useGameStore((s) => s.session)
@@ -175,9 +176,8 @@ export default function Relations() {
 
 
   return (
-    <div className={styles.page}>
-      <TopNav />
-      <Toasts />
+    <div className={`${styles.page} ${embedded ? styles.embedded : ''}`}>
+      {!embedded && <><TopNav /><Toasts /></>}
 
       <main className={styles.main}>
         <section
@@ -477,7 +477,7 @@ export default function Relations() {
                     type="button"
                     className={styles.talk}
                     onClick={() =>
-                      navigate(`/chat/${picked.id}`)
+                      onNpcSelect ? onNpcSelect(picked.id) : navigate(`/chat/${picked.id}`)
                     }
                   >
                     <MessageCircle size={16} />

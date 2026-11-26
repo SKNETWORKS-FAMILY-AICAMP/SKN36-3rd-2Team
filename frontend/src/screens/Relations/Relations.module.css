@@ -51,3 +51,6 @@
 .dot { width: 14px; height: 14px; padding: 0; border-radius: 50%; background: var(--blood-400); }
 .dimTag { opacity: .35; }
 .pin { z-index: 1; }
+
+/* /play 통합 화면 안에서는 부모 칸 높이에 맞춘다 */
+.embedded { height: 100%; min-height: 0; }

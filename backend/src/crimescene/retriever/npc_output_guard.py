@@ -45,6 +45,9 @@ QUOTE_OUTPUT_RULES = """
 11. 시간, 지시자, 점검 일지 등을 질문받았다면 해당 정보를 직접 뒷받침하는 원문만 선택하세요.
 12. 현재 승인된 근거만으로 질문에 답할 수 없다면 {"quotes": []}를 반환하세요.
 13. conversation_history에 이미 나온 인용을 새 질문에 무조건 반복하지 마세요.
+14. 각 인용문은 줄바꿈 없는 단일 행 원문 구절이어야 합니다.
+15. 여러 줄의 자료에서는 질문에 관련된 한 줄의 구절만 정확히 복사하세요.
+16. 줄바꿈을 공백으로 바꾸거나 서로 다른 행을 이어 붙이지 마세요.
 """.strip()
 
 logger = logging.getLogger(__name__)
@@ -62,6 +65,9 @@ QUOTE_RETRY_RULES = """
 6. 최상위 필드는 quotes 하나만 사용하세요.
 7. 근거를 찾을 수 없다면 {"quotes": []}를 반환하세요.
 
+8. 각 인용문은 줄바꿈 없는 단일 행 원문 구절이어야 합니다.
+9. 여러 행을 합치거나 줄바꿈을 공백으로 바꾸지 마세요.
+
 정확히 복사할 수 없는 문장은 인용하지 마세요.
 """.strip()
 
@@ -78,6 +84,7 @@ EMPTY_QUOTES_RETRY_RULES = """
 6. 완전한 문장이 아니어도 정확한 원문 구절이면 인용할 수 있습니다.
 7. 추측하거나 관련 없는 문장을 선택하지 마세요.
 8. 관련 근거가 전혀 없다면 {"quotes": []}를 반환하세요.
+9. 각 인용문은 줄바꿈 없는 단일 행 원문 구절만 사용하세요.
 
 최상위 필드가 quotes 하나인 JSON 객체만 반환하세요.
 """.strip()
@@ -169,6 +176,27 @@ def _is_plan_bound_to_context(
     return all(item.content in context.text for item in context.items)
 
 
+def _is_renderable_quote(quote: str) -> bool:
+    """Keep the existing single-line canonical quote contract."""
+
+    return (
+        quote.splitlines() == [quote]
+        and "(근거:" not in quote
+        and "제가 확인한 자료에는 이렇게 나와 있어요." not in quote
+    )
+
+
+def _is_renderable_source_id(source_id: str) -> bool:
+    """Reject identifiers that break canonical source delimiters."""
+
+    return (
+        bool(source_id)
+        and source_id.splitlines() == [source_id]
+        and ")" not in source_id
+        and "(근거:" not in source_id
+    )
+
+
 def _verify_quotes(
     raw_output: str,
     context: AuthorizedMultisourceContext,
@@ -227,7 +255,10 @@ def _verify_quotes(
         source_id = entry["source_id"]
         quote = entry["quote"]
 
-        if not isinstance(source_id, str):
+        if (
+            not isinstance(source_id, str)
+            or not _is_renderable_source_id(source_id)
+        ):
             return ()
 
         if not isinstance(quote, str):
@@ -236,6 +267,9 @@ def _verify_quotes(
         quote = quote.strip()
 
         if not MIN_QUOTE_LENGTH <= len(quote) <= MAX_QUOTE_LENGTH:
+            return ()
+
+        if not _is_renderable_quote(quote):
             return ()
 
         source_contents = authorized_sources.get(source_id)
@@ -312,7 +346,10 @@ def _quote_failure_reason(
         source_id = entry["source_id"]
         quote = entry["quote"]
 
-        if not isinstance(source_id, str):
+        if (
+            not isinstance(source_id, str)
+            or not _is_renderable_source_id(source_id)
+        ):
             return "INVALID_SOURCE_ID"
 
         if not isinstance(quote, str):
@@ -325,6 +362,9 @@ def _quote_failure_reason(
 
         if not MIN_QUOTE_LENGTH <= len(quote) <= MAX_QUOTE_LENGTH:
             return "INVALID_QUOTE_LENGTH"
+
+        if not _is_renderable_quote(quote):
+            return "INVALID_QUOTE_FORMAT"
 
         if not any(quote in content for content in allowed[source_id]):
             return "QUOTE_NOT_IN_SOURCE"

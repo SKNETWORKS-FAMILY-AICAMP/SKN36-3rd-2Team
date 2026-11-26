@@ -7,6 +7,10 @@ from crimescene.chat.npc_emotional_state import (
     NPCEmotionalState,
     get_emotion_opener,
 )
+from crimescene.chat.npc_evidence_dialogue import (
+    EvidenceDialogueContext,
+    get_evidence_dialogue_opener,
+)
 from crimescene.chat.npc_reaction import NPCReaction
 from crimescene.retriever.authorized_multisource_context import (
     AuthorizedMultisourceContext,
@@ -81,6 +85,7 @@ def render_npc_speech(
     reaction: NPCReaction,
     expanded_persona: bool = False,
     emotion: NPCEmotionalState | None = None,
+    evidence_dialogue: EvidenceDialogueContext | None = None,
 ) -> str:
     """승인된 인용문을 NPC의 화면용 대화로 변환합니다.
 
@@ -116,6 +121,23 @@ def render_npc_speech(
             raise ValueError("Invalid emotional context")
 
         emotional_opener = get_emotion_opener(emotion)
+
+    evidence_opener = None
+
+    if evidence_dialogue is not None:
+        if not isinstance(evidence_dialogue, EvidenceDialogueContext):
+            raise TypeError("Invalid evidence context")
+
+        if (
+            not expanded_persona
+            or evidence_dialogue.character_id != reaction.character_id
+        ):
+            raise ValueError("Invalid evidence display context")
+
+        evidence_opener = get_evidence_dialogue_opener(
+            evidence_dialogue,
+            emotion,
+        )
 
     if not reply.grounded:
         return FALLBACK_REPLY
@@ -164,7 +186,10 @@ def render_npc_speech(
     if tuple(observed_source_ids) != reply.source_ids:
         return FALLBACK_REPLY
 
-    if reaction.mode == "new_evidence":
+    if evidence_opener is not None:
+        opener = evidence_opener
+
+    elif reaction.mode == "new_evidence":
         opener = NEW_EVIDENCE_OPENERS[reaction.character_id]
 
     elif emotional_opener is not None:

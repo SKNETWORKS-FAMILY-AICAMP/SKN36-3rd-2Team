@@ -18,6 +18,10 @@ from crimescene.chat.npc_emotional_state import (
     build_npc_emotion_prompt,
     derive_npc_emotional_state,
 )
+from crimescene.chat.npc_evidence_dialogue import (
+    EvidenceDialogueContext,
+    build_evidence_dialogue_prompt,
+)
 from crimescene.chat.npc_history_context import (
     build_contextual_npc_reply_plan,
 )
@@ -71,6 +75,7 @@ def run_npc_chat(
     ] = generate_npc_json,
     matched_topics: Iterable[str] = (),
     evidence_just_presented: bool = False,
+    evidence_dialogue: EvidenceDialogueContext | None = None,
 ) -> NPCChatTurn:
     """NPC 질문 처리부터 검증된 응답 저장까지 실행한다.
 
@@ -108,6 +113,26 @@ def run_npc_chat(
 
     topics = tuple(matched_topics)
 
+    if evidence_dialogue is not None:
+        if not isinstance(evidence_dialogue, EvidenceDialogueContext):
+            raise TypeError("Invalid evidence dialogue context")
+
+        evidence_dialogue.validate(
+            state,
+            session_store.get_active_npc(state),
+        )
+
+        if (
+            evidence_dialogue.first_presentation
+            != evidence_just_presented
+        ):
+            raise PermissionError("Presentation status mismatch")
+
+    evidence_turn = (
+        evidence_just_presented
+        or evidence_dialogue is not None
+    )
+
     initial_revision = state.revision
 
     # ==================================================
@@ -117,14 +142,14 @@ def run_npc_chat(
     # 증거를 제시한 턴은 반드시 RAG 경로로 처리
     social_intent = (
         None
-        if evidence_just_presented
+        if evidence_turn
         else match_safe_social_intent(query)
     )
 
     recall_requested = (
         state.case_id == "CASE-001"
         and state.content_version == "case001_1120"
-        and not evidence_just_presented
+        and not evidence_turn
         and is_memory_recall_question(query)
     )
 
@@ -210,7 +235,7 @@ def run_npc_chat(
             {"use_memory_context": True}
             if (
                 state.content_version == "case001_1120"
-                and not evidence_just_presented
+                and not evidence_turn
             )
             else {}
         ),
@@ -218,6 +243,9 @@ def run_npc_chat(
 
     character_id = rag_result.character_id
     plan = rag_result.reply_plan
+
+    if evidence_dialogue is not None:
+        evidence_dialogue.validate(state, character_id)
 
     if not isinstance(plan, NPCReplyPlan):
         raise TypeError("NPCReplyPlan이 필요합니다.")
@@ -230,7 +258,10 @@ def run_npc_chat(
 
     if (
         state.content_version == "case001_1120"
-        and not evidence_just_presented
+        and (
+            not evidence_just_presented
+            or evidence_dialogue is not None
+        )
         and plan.can_call_llm
     ):
         emotion = derive_npc_emotional_state(
@@ -238,6 +269,7 @@ def run_npc_chat(
             state=state,
             character_id=character_id,
             history=rag_result.history,
+            evidence_just_presented=evidence_turn,
         )
 
     if plan.can_call_llm:
@@ -294,7 +326,18 @@ def run_npc_chat(
         if state.content_version == "case001_1120":
             intent_suffix = "\n\n" + build_npc_intent_prompt(
                 query,
-                evidence_just_presented=evidence_just_presented,
+                evidence_just_presented=evidence_turn,
+            )
+
+        evidence_suffix = ""
+
+        if evidence_dialogue is not None:
+            evidence_suffix = (
+                "\n\n"
+                + build_evidence_dialogue_prompt(
+                    evidence_dialogue,
+                    context,
+                )
             )
 
         contextual_plan = replace(
@@ -308,6 +351,7 @@ def run_npc_chat(
                         + reaction_prompt
                         + persona_suffix
                         + intent_suffix
+                        + evidence_suffix
                         + (
                             "\n\n" + build_npc_emotion_prompt(emotion)
                             if emotion is not None
@@ -324,7 +368,7 @@ def run_npc_chat(
 
         if (
             state.content_version == "case001_1120"
-            and not evidence_just_presented
+            and not evidence_turn
         ):
             cached_output = build_revalidated_repeat_output(
                 query,
@@ -430,6 +474,11 @@ def run_npc_chat(
                 {
                     "expanded_persona": True,
                     **(
+                        {"evidence_dialogue": evidence_dialogue}
+                        if evidence_dialogue is not None
+                        else {}
+                    ),
+                    **(
                         {"emotion": emotion}
                         if emotion is not None
                         else {}
@@ -443,6 +492,16 @@ def run_npc_chat(
     # ==================================================
     # 8. 검증된 NPC 응답 저장
     # ==================================================
+
+    # A rejected display must never be recorded as a successful
+    # disclosure or become an authorized conversation memory.
+    if reply.grounded and display_text == FALLBACK_REPLY:
+        reply = NPCGroundedReply(
+            text=FALLBACK_REPLY,
+            source_ids=(),
+            grounded=False,
+        )
+        display_text = FALLBACK_REPLY
 
     # Keep canonical quotes for memory validation.
     # Persist presentation separately for expanded grounded turns.

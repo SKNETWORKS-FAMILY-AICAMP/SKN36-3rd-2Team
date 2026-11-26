@@ -72,6 +72,9 @@ def is_valid_stored_display(
     from crimescene.chat.npc_emotional_state import (
         EMOTION_OPENERS,
     )
+    from crimescene.chat.npc_evidence_dialogue import (
+        allowed_evidence_dialogue_openers,
+    )
     from crimescene.chat.npc_natural_reply import (
         EXPANDED_NEUTRAL_OPENERS,
         REPEATED_OPENERS,
@@ -113,6 +116,7 @@ def is_valid_stored_display(
         REPEATED_OPENERS[character_id],
         NEW_EVIDENCE_OPENERS[character_id],
         *EMOTION_OPENERS[character_id],
+        *allowed_evidence_dialogue_openers(character_id),
     )
 
     allowed = {

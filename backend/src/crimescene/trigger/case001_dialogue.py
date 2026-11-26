@@ -161,6 +161,26 @@ def run_case001_npc_dialogue(
 
     # matched_topics는 플레이어 입력이 아니라
     # 서버 정책 검증을 통과한 결과만 사용한다.
+    evidence_options = {}
+
+    if (
+        state.content_version == "case001_1120"
+        and presented_evidence_id is not None
+    ):
+        from crimescene.chat.npc_evidence_dialogue import (
+            build_evidence_dialogue_context,
+        )
+
+        evidence_options["evidence_dialogue"] = (
+            build_evidence_dialogue_context(
+                before=state,
+                after=event.state,
+                character_id=active_npc,
+                evidence_id=presented_evidence_id,
+                presentation_created=event.presentation_created,
+            )
+        )
+
     turn = run_npc_chat(
         question,
         state=event.state,
@@ -168,6 +188,7 @@ def run_case001_npc_dialogue(
         resources=resources,
         matched_topics=event.matched_topics,
         evidence_just_presented=event.presentation_created,
+        **evidence_options,
     )
 
     # NPC가 실제 인용한 지식 카드만 공개 완료 처리한다.

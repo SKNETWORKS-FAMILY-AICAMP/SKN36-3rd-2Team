@@ -3,6 +3,8 @@ import { create } from 'zustand'
 import { api } from '../api/client'
 import { ApiHttpError } from '../api/httpApi'
 import {
+  endingToResponse,
+  isExpandedSession,
   isGameOver,
   type AccuseResponse,
   type EvidenceDetail,
@@ -65,7 +67,8 @@ interface GameStore {
 
   final: FinalRecord | null
 
-  giveUp: (suspectId: string, response?: AccuseResponse) => void
+  /** 수사를 끝낸다. 실패하면 화면에 보여줄 안내 문구를, 성공하면 null을 돌려준다 */
+  giveUp: (suspectId: string, response?: AccuseResponse) => Promise<string | null>
   accuse: (
     suspectId: string,
     evidenceIds: string[],
@@ -199,17 +202,47 @@ export const useGameStore = create<GameStore>((set, get) => ({
   // 범인 지목
   // ==========================================================
 
-  giveUp(suspectId, previous) {
+  async giveUp(suspectId, previous) {
     const { session, final, accusing } = get()
-    if (!session || final || accusing || session.phase === 'FINISHED') return
-    const response: AccuseResponse = {
-      result: previous?.result ?? 'NOT_ENOUGH_EVIDENCE',
-      attemptsLeft: session.attemptsLeft, gameOver: true,
-      ending: { title: '수사 종료', text: '남은 기회를 사용하지 않고 이번 조사를 마쳤습니다.' },
+    if (!session || final || accusing || session.phase === 'FINISHED') return null
+    const base = { sessionId: session.sessionId, suspectId, evidenceIds: [...session.foundEvidence] }
+    set({ accusing: true })
+    try {
+      // 확장판 서버: 서버가 '증거 부족' 엔딩으로 게임을 끝낸다
+      const record: FinalRecord = { ...base, gaveUp: true, response: await api.giveUp(session.sessionId) }
+      saveFinal(record)
+      set({ final: record })
+      await get().refresh().catch(() => undefined)
+      return null
+    } catch (error) {
+      const http = error instanceof ApiHttpError ? error : null
+      // 포기는 됐는데 엔딩 조회만 실패했을 수 있으니 먼저 서버 상태로 맞춘다 (FINISHED면 엔딩 복구)
+      await get().refresh().catch(() => undefined)
+      if (get().final) return null
+      // 기존판: 포기 라우트가 없으면 404 Not Found, 있으면 콘텐츠 버전이 달라 409 Give-up unavailable
+      const legacy = !isExpandedSession(get().session) &&
+        ((http?.status === 404 && http.message === 'Not Found') || (http?.status === 409 && http.message === 'Give-up unavailable'))
+      if (!legacy) {
+        return http?.status === 409 && http.message === 'Accusation requirements already met'
+          ? '이미 단서가 충분히 모였습니다. 범인을 지목해 주세요.'
+          : '수사를 종료하지 못했습니다. 잠시 후 다시 시도해 주세요.'
+      }
+      // 기존판 서버(포기 API 없음): 이 기기에서만 종료 처리
+      const record: FinalRecord = {
+        ...base,
+        gaveUp: true,
+        response: {
+          result: previous?.result ?? 'NOT_ENOUGH_EVIDENCE',
+          attemptsLeft: session.attemptsLeft, gameOver: true,
+          ending: { title: '수사 종료', text: '남은 기회를 사용하지 않고 이번 조사를 마쳤습니다.' },
+        },
+      }
+      saveFinal(record)
+      set({ final: record })
+      return null
+    } finally {
+      set({ accusing: false })
     }
-    const record = { sessionId: session.sessionId, suspectId, evidenceIds: [...session.foundEvidence], response, gaveUp: true }
-    saveFinal(record)
-    set({ final: record })
   },
 
   async accuse(suspectId, evidenceIds) {
@@ -337,28 +370,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         evidenceTitles:
           previous?.evidenceTitles ?? {},
 
-        response: {
-          result:
-            ending.outcome === 'SUCCESS'
-              ? ending.verdict ?? 'FULL'
-              : 'WRONG',
-
-          attemptsLeft: state.attemptsLeft,
-          gameOver: true,
-
-          ending: {
-            title: ending.title,
-            text: ending.message,
-          },
-
-          endingKind:
-            ending.deepEligible
-              ? 'DEEP'
-              : 'NORMAL',
-
-          truth: ending.truth,
-          scene: ending.scene,
-        },
+        response: endingToResponse(ending, state.attemptsLeft),
       }
 
       set({

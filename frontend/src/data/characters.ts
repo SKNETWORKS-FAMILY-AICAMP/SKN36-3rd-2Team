@@ -36,6 +36,7 @@ export const ALBUM: AlbumEntry[] = [
 
 export const GROUP_PHOTO = asset('group/group2016.webp')
 export const POSTER_BG = asset('backgrounds/bg_poster.webp')
+export const MEETING_BG = asset('backgrounds/bg_meeting.webp')
 
 // ── NPC 공개 프로필 (대화 화면용) ─────────────────────────────
 // 직함/외형/말투는 공개 가능한 첫 문장 수준만 담는다. 행적·비밀·관계는 넣지 않는다.

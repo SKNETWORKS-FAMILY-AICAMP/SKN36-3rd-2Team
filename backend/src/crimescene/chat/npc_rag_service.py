@@ -8,6 +8,9 @@ from qdrant_client import QdrantClient
 
 from crimescene.chat.npc_behavior import build_npc_behavior_prompt
 from crimescene.chat.npc_persona import NPCPersona
+from crimescene.chat.npc_conversation_memory import (
+    build_memory_search_query,
+)
 from crimescene.chat.npc_session import (
     MAX_MESSAGE_LENGTH,
     NPCExchange,
@@ -163,6 +166,7 @@ def prepare_npc_chat_rag(
     relation_top_k: int = 20,
     evidence_top_k: int = 10,
     top_k: int = 10,
+    use_memory_context: bool = False,
 ) -> NPCChatRAGResult:
     """현재 NPC에 한정된 Hybrid RAG 응답 계획을 생성한다.
 
@@ -183,6 +187,9 @@ def prepare_npc_chat_rag(
     # --------------------------------------------------------
 
     question = _validate_query(query)
+
+    if type(use_memory_context) is not bool:
+        raise TypeError("Invalid memory context option")
 
     if not isinstance(state, GameState):
         raise TypeError("GameState가 필요합니다.")
@@ -245,8 +252,32 @@ def prepare_npc_chat_rag(
     # 5. Hybrid RAG 검색
     # --------------------------------------------------------
 
+    # Only the search query is expanded.
+    # The original player question remains the LLM input.
+    search_question = question
+
+    if (
+        use_memory_context
+        and state.content_version == "case001_1120"
+    ):
+        current_history = session_store.get_history(
+            state,
+            character_id,
+        )
+
+        expanded_question = build_memory_search_query(
+            question,
+            current_history,
+            current_revision=state.revision,
+        )
+
+        try:
+            search_question = _validate_query(expanded_question)
+        except ValueError:
+            search_question = question
+
     candidates = search_policy_scoped_multisource_candidates(
-        question,
+        search_question,
         qdrant_client=resources.qdrant_client,
         neo4j_driver=resources.neo4j_driver,
         embedder=resources.embedder,
@@ -278,7 +309,7 @@ def prepare_npc_chat_rag(
 
     if any(item.kind in {"relation", "evidence"} for item in candidates):
         graph_context = retrieve_question_graph(
-            question,
+            search_question,
             driver=resources.neo4j_driver,
             active_character_id=character_id,
             state=state,

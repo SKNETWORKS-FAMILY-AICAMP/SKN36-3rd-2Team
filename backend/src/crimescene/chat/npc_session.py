@@ -21,6 +21,10 @@ from threading import RLock
 from typing import Protocol
 
 from crimescene.chat.npc_persona import EXPECTED_CHARACTER_IDS
+from crimescene.chat.npc_memory_recall import (
+    build_memory_recall_from_history,
+    is_memory_recall_question,
+)
 from crimescene.chat.npc_social_dialogue import (
     is_approved_social_reply,
 )
@@ -42,6 +46,7 @@ class NPCExchange:
     npc_message: str
     source_ids: tuple[str, ...]
     state_revision: int
+    display_text: str | None = None
 
 
 class NPCSessionRepository(Protocol):
@@ -327,6 +332,7 @@ class NPCSessionStore:
         *,
         user_message: str,
         reply: NPCGroundedReply,
+        display_text: str | None = None,
     ) -> NPCExchange:
         """검증된 NPC 응답을 대화 기록에 추가한다.
 
@@ -380,6 +386,15 @@ class NPCSessionStore:
         if len(source_ids) != len(set(source_ids)):
             raise ValueError("중복된 출처 ID입니다.")
 
+        memory_recall = (
+            not reply.grounded
+            and not source_ids
+            and answer != FALLBACK_REPLY
+            and state.case_id == "CASE-001"
+            and state.content_version == "case001_1120"
+            and is_memory_recall_question(question)
+        )
+
         # 승인된 근거가 있는 응답만 저장한다.
         if reply.grounded:
             if not source_ids:
@@ -392,14 +407,34 @@ class NPCSessionStore:
                 question,
                 answer,
             )
+            and not memory_recall
         ):
             raise ValueError("검증되지 않은 NPC 응답은 저장할 수 없습니다.")
+
+        if display_text is not None:
+            from crimescene.chat.npc_history_display import (
+                is_valid_stored_display,
+            )
+
+            if (
+                state.content_version != "case001_1120"
+                or not isinstance(display_text, str)
+                or len(display_text) > MAX_REPLY_LENGTH
+                or not is_valid_stored_display(
+                    answer,
+                    source_ids,
+                    character_id,
+                    display_text,
+                )
+            ):
+                raise ValueError("검증되지 않은 화면 응답입니다.")
 
         exchange = NPCExchange(
             user_message=question,
             npc_message=answer,
             source_ids=source_ids,
             state_revision=state.revision,
+            display_text=display_text,
         )
 
         with self._lock:
@@ -416,6 +451,24 @@ class NPCSessionStore:
 
                 if active_id != character_id:
                     raise PermissionError("현재 선택된 NPC가 아닙니다.")
+
+                if memory_recall:
+                    history = self._repository.load_history(
+                        state.session_id,
+                        character_id,
+                    )
+
+                    expected = build_memory_recall_from_history(
+                        character_id,
+                        question,
+                        history,
+                        current_revision=state.revision,
+                    )
+
+                    if expected is None or answer != expected:
+                        raise ValueError(
+                            "검증되지 않은 기억 응답입니다."
+                        )
 
                 self._repository.append_exchange(
                     state.session_id,
@@ -435,6 +488,19 @@ class NPCSessionStore:
                 character_id,
                 deque(maxlen=self._max_exchanges_per_npc),
             )
+
+            if memory_recall:
+                expected = build_memory_recall_from_history(
+                    character_id,
+                    question,
+                    tuple(history),
+                    current_revision=state.revision,
+                )
+
+                if expected is None or answer != expected:
+                    raise ValueError(
+                        "검증되지 않은 기억 응답입니다."
+                    )
 
             history.append(exchange)
             session.latest_revision = state.revision

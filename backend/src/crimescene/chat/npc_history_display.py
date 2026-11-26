@@ -9,7 +9,7 @@ from crimescene.chat.npc_natural_reply import LEGACY_HEADER, QUOTE_PATTERN
 from crimescene.retriever.npc_response_gate import FALLBACK_REPLY
 
 
-def render_stored_npc_message(
+def _render_canonical_npc_message(
     message: str,
     source_ids: Sequence[str],
 ) -> str:
@@ -58,3 +58,91 @@ def render_stored_npc_message(
 
     # 메타데이터 없는 NPC 대사만 전송합니다. 내용은 재작성하지 않습니다.
     return "\n".join(quotes)
+
+
+
+def is_valid_stored_display(
+    message: str,
+    source_ids: Sequence[str],
+    character_id: str,
+    display_text: str,
+) -> bool:
+    """Allow only canonical content and server-owned NPC openers."""
+
+    from crimescene.chat.npc_natural_reply import (
+        EXPANDED_NEUTRAL_OPENERS,
+        REPEATED_OPENERS,
+        NEW_EVIDENCE_OPENERS,
+    )
+
+    if character_id not in EXPANDED_NEUTRAL_OPENERS:
+        return False
+
+    if not isinstance(display_text, str) or not display_text.strip():
+        return False
+
+    # A safe refusal cannot disclose additional information.
+    if display_text == FALLBACK_REPLY:
+        return True
+
+    plain = _render_canonical_npc_message(
+        message,
+        source_ids,
+    )
+
+    if plain == FALLBACK_REPLY:
+        return False
+
+    if not source_ids:
+        return display_text == plain
+
+    if "(근거:" in display_text or LEGACY_HEADER in display_text:
+        return False
+
+    # Preserve exact quote order and content.
+    body = "\n".join(
+        f"“{quote}”"
+        for quote in plain.splitlines()
+    )
+
+    openers = (
+        EXPANDED_NEUTRAL_OPENERS[character_id],
+        REPEATED_OPENERS[character_id],
+        NEW_EVIDENCE_OPENERS[character_id],
+    )
+
+    allowed = {
+        f"{opener}\n{body}" if opener else body
+        for opener in openers
+    }
+
+    return display_text in allowed
+
+
+def render_stored_npc_message(
+    message: str,
+    source_ids: Sequence[str],
+    *,
+    character_id: str | None = None,
+    stored_display: str | None = None,
+) -> str:
+    """Restore the actual displayed reply when safely persisted."""
+
+    if stored_display is None:
+        return _render_canonical_npc_message(
+            message,
+            source_ids,
+        )
+
+    if character_id is None:
+        return FALLBACK_REPLY
+
+    if not is_valid_stored_display(
+        message,
+        source_ids,
+        character_id,
+        stored_display,
+    ):
+        return FALLBACK_REPLY
+
+    return stored_display

@@ -14,6 +14,10 @@ from crimescene.chat.npc_session import (
     NPCSessionStore,
 )
 from crimescene.chat.npc_session_repository import SQLiteNPCSessionRepository
+from crimescene.chat.npc_memory_recall import (
+    build_memory_recall_reply,
+    is_memory_recall_question,
+)
 from crimescene.chat.npc_social_dialogue import is_approved_social_reply
 from crimescene.retriever.npc_output_guard import NPCGroundedReply
 from crimescene.retriever.npc_response_gate import FALLBACK_REPLY
@@ -397,6 +401,27 @@ class SQLiteCase001Repository(SQLiteNPCSessionRepository):
         if reply.grounded and not reply.source_ids:
             raise ValueError("검증된 응답에는 출처가 필요합니다.")
 
+        if exchange.display_text is not None:
+            from crimescene.chat.npc_history_display import (
+                is_valid_stored_display,
+            )
+
+            if (
+                expected_state.content_version != "case001_1120"
+                or not isinstance(exchange.display_text, str)
+                or len(exchange.display_text) > MAX_REPLY_LENGTH
+                or exchange.display_text != turn.display_text
+                or not is_valid_stored_display(
+                    exchange.npc_message,
+                    exchange.source_ids,
+                    turn.character_id,
+                    exchange.display_text,
+                )
+            ):
+                raise ValueError("검증되지 않은 화면 응답입니다.")
+
+        memory_recall = False
+
         if not reply.grounded:
             is_safe_social = is_approved_social_reply(
                 turn.character_id,
@@ -404,8 +429,18 @@ class SQLiteCase001Repository(SQLiteNPCSessionRepository):
                 reply.text,
             )
 
+            memory_recall = (
+                not reply.source_ids
+                and reply.text != FALLBACK_REPLY
+                and expected_state.case_id == "CASE-001"
+                and expected_state.content_version == "case001_1120"
+                and is_memory_recall_question(exchange.user_message)
+            )
+
             if reply.source_ids or (
-                reply.text != FALLBACK_REPLY and not is_safe_social
+                reply.text != FALLBACK_REPLY
+                and not is_safe_social
+                and not memory_recall
             ):
                 raise ValueError("검증되지 않은 NPC 응답은 저장할 수 없습니다.")
 
@@ -456,6 +491,46 @@ class SQLiteCase001Repository(SQLiteNPCSessionRepository):
             ):
                 raise ValueError("NPC 선택 상태 또는 revision이 변경됐습니다.")
 
+            # Revalidate recall against the latest persisted question.
+            # This runs under the same BEGIN IMMEDIATE transaction.
+            if memory_recall:
+                previous = db.execute(
+                    '''
+                    SELECT user_message, state_revision
+                    FROM npc_exchanges
+                    WHERE session_id = ?
+                      AND character_id = ?
+                    ORDER BY id DESC
+                    LIMIT 1
+                    ''',
+                    (
+                        expected_state.session_id,
+                        turn.character_id,
+                    ),
+                ).fetchone()
+
+                expected_reply = build_memory_recall_reply(
+                    turn.character_id,
+                    exchange.user_message,
+                    previous_question=(
+                        previous["user_message"]
+                        if previous is not None else None
+                    ),
+                    previous_revision=(
+                        previous["state_revision"]
+                        if previous is not None else None
+                    ),
+                    current_revision=expected_state.revision,
+                )
+
+                if (
+                    expected_reply is None
+                    or reply.text != expected_reply
+                ):
+                    raise ValueError(
+                        "검증되지 않은 기억 응답입니다."
+                    )
+
             # 1. 게임 상태 저장
             db.execute(
                 """
@@ -479,9 +554,10 @@ class SQLiteCase001Repository(SQLiteNPCSessionRepository):
                     user_message,
                     npc_message,
                     source_ids_json,
-                    state_revision
+                    state_revision,
+                    display_text
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     expected_state.session_id,
@@ -493,6 +569,7 @@ class SQLiteCase001Repository(SQLiteNPCSessionRepository):
                         ensure_ascii=False,
                     ),
                     exchange.state_revision,
+                    exchange.display_text,
                 ),
             )
 

@@ -63,9 +63,10 @@ class SQLiteNPCSessionRepository:
             connection.close()
 
     def _initialize(self) -> None:
-        """필요한 테이블을 생성한다."""
+        """필요한 테이블과 호환성 컬럼을 생성한다."""
 
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS npc_sessions (
@@ -86,12 +87,27 @@ class SQLiteNPCSessionRepository:
                     npc_message TEXT NOT NULL,
                     source_ids_json TEXT NOT NULL,
                     state_revision INTEGER NOT NULL,
+                    display_text TEXT,
                     FOREIGN KEY (session_id)
                         REFERENCES npc_sessions(session_id)
                         ON DELETE CASCADE
                 )
                 """
             )
+
+            columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(npc_exchanges)"
+                )
+            }
+
+            # Preserve existing rows and support repeated initialization.
+            if "display_text" not in columns:
+                connection.execute(
+                    "ALTER TABLE npc_exchanges "
+                    "ADD COLUMN display_text TEXT"
+                )
 
             connection.execute(
                 """
@@ -212,6 +228,23 @@ class SQLiteNPCSessionRepository:
 
         self._validate_revision(exchange.state_revision)
 
+        if exchange.display_text is not None:
+            from crimescene.chat.npc_history_display import (
+                is_valid_stored_display,
+            )
+
+            if (
+                not isinstance(exchange.display_text, str)
+                or len(exchange.display_text) > MAX_REPLY_LENGTH
+                or not is_valid_stored_display(
+                    exchange.npc_message,
+                    exchange.source_ids,
+                    character_id,
+                    exchange.display_text,
+                )
+            ):
+                raise ValueError("검증되지 않은 화면 응답입니다.")
+
         if (
             not exchange.user_message.strip()
             or len(exchange.user_message) > MAX_MESSAGE_LENGTH
@@ -265,9 +298,10 @@ class SQLiteNPCSessionRepository:
                     user_message,
                     npc_message,
                     source_ids_json,
-                    state_revision
+                    state_revision,
+                    display_text
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session_id,
@@ -279,6 +313,7 @@ class SQLiteNPCSessionRepository:
                         ensure_ascii=False,
                     ),
                     exchange.state_revision,
+                    exchange.display_text,
                 ),
             )
 
@@ -332,7 +367,8 @@ class SQLiteNPCSessionRepository:
                     user_message,
                     npc_message,
                     source_ids_json,
-                    state_revision
+                    state_revision,
+                    display_text
                 FROM npc_exchanges
                 WHERE session_id = ?
                   AND character_id = ?
@@ -370,6 +406,7 @@ class SQLiteNPCSessionRepository:
                     npc_message=row["npc_message"],
                     source_ids=tuple(source_ids),
                     state_revision=row["state_revision"],
+                    display_text=row["display_text"],
                 )
             )
 

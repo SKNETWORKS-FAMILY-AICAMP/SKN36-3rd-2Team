@@ -1411,6 +1411,8 @@ def create_app(
                     displayText=render_stored_npc_message(
                         exchange.npc_message,
                         exchange.source_ids,
+                        character_id=character_id,
+                        stored_display=exchange.display_text,
                     ),
                 )
                 for exchange in history

@@ -1,4 +1,4 @@
-.page { height: 100vh; display: flex; flex-direction: column; background: var(--page-bg); overflow: hidden; }
+.page { height: 100vh; display: flex; flex-direction: column; background: var(--page-bg) center / cover no-repeat; overflow: hidden; }
 
 /* 인물 선택 폴라로이드 줄 */
 .row { list-style: none; margin: 0; padding: 12px 28px 10px; display: flex; gap: 12px; overflow-x: auto; flex: none; border-bottom: 1px solid var(--ink-700); }
@@ -127,3 +127,14 @@ li:nth-child(even) .polaroid { transform: rotate(1.4deg); }
   color: var(--blood-400);
   font-weight: 600;
 }
+
+/* 진술 저장 버튼 */
+.saveBtn { align-self: flex-start; padding: 2px 8px; font-size: 12px; color: var(--paper-300); background: transparent; border: 1px solid var(--ash-500); cursor: pointer; }
+.saveBtn:hover { color: var(--paper-100); border-color: var(--brass-400); }
+.saveBtn[aria-pressed='true'] { color: var(--brass-400); border-color: var(--brass-400); }
+
+/* 제시할 증거 표시 (입력창 위) */
+.picked { flex: 1 1 100%; display: flex; align-items: center; gap: 6px; margin: 0; padding: 6px 10px; font-size: 13px; color: var(--paper-200); background: var(--ink-800); border-left: 3px solid var(--brass-400); }
+.picked b { color: var(--brass-400); font-weight: 600; }
+.picked span { color: var(--paper-400); }
+.picked button { margin-left: auto; display: grid; place-items: center; color: var(--paper-300); background: none; border: 0; cursor: pointer; }

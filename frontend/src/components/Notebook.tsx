@@ -1,15 +1,32 @@
 import { NOTE_SECTIONS, useNoteStore } from '../store/noteStore'
+import { npcName } from '../data/characters'
 import styles from './Notebook.module.css'
 
 // 직접 쓰는 빈 노트. 시스템이 내용을 채우지 않는다. 항목은 "나만의 추리" 하나뿐이다.
 export default function Notebook({ compact = false }: { compact?: boolean }) {
   const notes = useNoteStore((s) => s.notes)
   const setNote = useNoteStore((s) => s.setNote)
+  const statements = useNoteStore((s) => s.statements)
+  const toggleStatement = useNoteStore((s) => s.toggleStatement)
   const section = NOTE_SECTIONS[0]
 
   return (
     <div className={`${styles.book} ${compact ? styles.compact : ''}`}>
       <div className={styles.page}>
+        <h3 className="serif">저장한 진술</h3>
+        {statements.length === 0 ? (
+          <p className={styles.empty}>면담 중 답변 아래 "진술 저장"을 누르면 여기에 모입니다.</p>
+        ) : (
+          <ul className={styles.statements}>
+            {statements.map((s) => (
+              <li key={s.id}>
+                <b>{npcName(s.npcId)}</b>
+                <span>{s.text}</span>
+                <button type="button" onClick={() => toggleStatement(s)} aria-label={`${npcName(s.npcId)} 진술 삭제`}>삭제</button>
+              </li>
+            ))}
+          </ul>
+        )}
         <h3 className="serif">{section.title}</h3>
         <textarea
           value={notes.theory}

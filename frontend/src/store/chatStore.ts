@@ -19,6 +19,8 @@ interface ChatStore {
     npcId: string,
     evidenceId: string,
     title: string,
+    /** 증거와 함께 보낼 질문. 없으면 기본 질문 */
+    question?: string,
   ) => Promise<void>
   retry: () => Promise<void>
 }
@@ -277,11 +279,11 @@ export const useChatStore = create<ChatStore>((set, get) => {
         (sid) => api.sendMessage(sid, npcId, text),
       ),
 
-    present: (npcId, evidenceId, title) =>
+    present: (npcId, evidenceId, title, question) =>
       run(
         npcId,
-        `[증거 제시] ${title}`,
-        (sid) => api.presentEvidence(sid, npcId, evidenceId),
+        question ? `[증거 제시] ${title}\n${question}` : `[증거 제시] ${title}`,
+        (sid) => api.presentEvidence(sid, npcId, evidenceId, question),
       ),
   }
 })

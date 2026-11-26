@@ -442,11 +442,12 @@ export const httpApi: GameApi = {
     sessionId: string,
     npcId: string,
     evidenceId: string,
+    question = '이 증거에 대해 설명해 주세요.',
   ): Promise<ChatReply> => withSessionChatLock(sessionId, async () => {
     await ensureNpcSelected(sessionId, npcId)
     const response = await request<BackendChatReply>(
       `${gamePath(sessionId)}/chat`,
-      post({ question: '이 증거에 대해 설명해 주세요.', presentedEvidenceId: evidenceId }),
+      post({ question, presentedEvidenceId: evidenceId }),
       CHAT_TIMEOUT_MS,
     )
     return {

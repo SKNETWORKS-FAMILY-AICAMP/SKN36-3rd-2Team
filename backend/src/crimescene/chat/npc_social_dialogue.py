@@ -8,12 +8,19 @@ SocialIntent = Literal[
     "talk",
     "thanks",
     "farewell",
+    "check_in",
 ]
 
 MAX_SOCIAL_LENGTH = 120
 
 # 사건과 무관한 안전한 일상 표현만 허용
 SOCIAL_PATTERNS = {
+    "check_in": re.compile(
+        r"(?:(?:많이\s*)?피곤해\s*보이시네요[.!]?\s*)?"
+        r"(?:괜찮으세요|괜찮으신가요|"
+        r"오늘\s*기분은\s*어때요|"
+        r"오늘\s*컨디션은\s*어떠세요)"
+    ),
     "greeting": re.compile(r"(?:안녕하세요|안녕하십니까|안녕)"),
     "talk": re.compile(
         r"(?:(?:안녕하세요|안녕하십니까)[.!]?\s*)?"
@@ -90,6 +97,21 @@ SOCIAL_RESPONSES = {
     ),
 }
 
+# Style-only replies. Do not assert health or hidden emotions.
+CHECK_IN_RESPONSES = {
+    "C01": "걱정해 주셔서 감사합니다. 말씀해 보시죠.",
+    "C02": "신경 써 주셔서 감사합니다. 말씀하세요.",
+    "C03": "아, 걱정해 주셔서 감사합니다. 어떤 이야기인데요?",
+    "C04": "감사합니다. 말씀하세요.",
+    "C05": "배려해 주셔서 감사합니다. 편하게 말씀하세요.",
+    "C06": "걱정해 주셔서 감사합니다. 천천히 말씀해 주세요.",
+    "C07": "아, 신경 써 주시네요. 고맙습니다!",
+    "C08": "신경 써 주시는군요. 감사합니다.",
+    "C09": "배려해 주셔서 감사합니다. 말씀을 듣겠습니다.",
+    "C10": "고맙습니다. 그래서, 무슨 이야기죠?",
+}
+
+
 INTENT_INDEX = {
     "greeting": 0,
     "talk": 1,
@@ -146,6 +168,9 @@ def build_safe_social_reply(
 
     if intent is None:
         raise ValueError("안전한 일상 대화로 분류되지 않았습니다.")
+
+    if intent == "check_in":
+        return CHECK_IN_RESPONSES[character_id]
 
     response = SOCIAL_RESPONSES[character_id][INTENT_INDEX[intent]]
 

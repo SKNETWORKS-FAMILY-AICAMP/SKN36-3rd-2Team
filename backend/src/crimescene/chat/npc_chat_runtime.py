@@ -5,6 +5,8 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 
 from crimescene.chat.llm_client import generate_npc_json
+from crimescene.chat.npc_dialogue_intent import build_npc_intent_prompt
+from crimescene.chat.npc_dynamic_persona import build_dynamic_npc_prompt
 from crimescene.chat.npc_history_context import (
     build_contextual_npc_reply_plan,
 )
@@ -226,6 +228,23 @@ def run_npc_chat(
                 "NPC 메시지 역할이 올바르지 않습니다."
             )
 
+        # Apply expanded persona guidance only after RAG authorization.
+        persona_suffix = ""
+
+        if state.content_version == "case001_1120":
+            persona_suffix = "\n\n" + build_dynamic_npc_prompt(
+                state=state,
+                character_id=character_id,
+            )
+
+        intent_suffix = ""
+
+        if state.content_version == "case001_1120":
+            intent_suffix = "\n\n" + build_npc_intent_prompt(
+                query,
+                evidence_just_presented=evidence_just_presented,
+            )
+
         contextual_plan = replace(
             contextual_plan,
             messages=(
@@ -235,6 +254,8 @@ def run_npc_chat(
                         system_message["content"]
                         + "\n\n"
                         + reaction_prompt
+                        + persona_suffix
+                        + intent_suffix
                     ),
                 },
                 user_message,
@@ -246,6 +267,11 @@ def run_npc_chat(
             contextual_plan,
             context,
             generate=generate,
+            **(
+                {"retry_empty_quotes": False}
+                if state.content_version == "case001_1120"
+                else {}
+            ),
         )
 
     else:
@@ -320,6 +346,11 @@ def run_npc_chat(
             reply,
             context=context,
             reaction=reaction,
+            **(
+                {"expanded_persona": True}
+                if state.content_version == "case001_1120"
+                else {}
+            ),
         )
 
     # ==================================================

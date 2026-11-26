@@ -78,7 +78,13 @@ def build_npc_system_prompt(
     if not persona.name.strip() or not persona.voice.strip():
         raise ValueError("NPC 이름과 말투 설정이 필요합니다.")
 
-    return f"""당신은 추리 게임 《마지막 기록: 사라진 공동체》의 등장인물입니다.
+    game_title = (
+        "마지막 기록: 졸업하지 못한 밤"
+        if state.content_version == "case001_1120"
+        else "마지막 기록: 사라진 공동체"
+    )
+
+    return f"""당신은 추리 게임 《{game_title}》의 등장인물입니다.
 
 [현재 인물]
 이름: {persona.name}

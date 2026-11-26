@@ -1,5 +1,7 @@
 """CASE-001 expanded content integration entrypoint."""
 
+import hashlib
+import json
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -69,6 +71,7 @@ RUNTIME_ATTRIBUTES = (
     "dialogue_triggers",
     "dialogue_flag_config",
     "django_content_client",
+    "e30_approval_check",
     "approved_acquisition_routes",
     "e26_section_a_approved",
     "approved_investigation_actions",
@@ -149,6 +152,36 @@ async def expanded_lifespan(
                 manifest=manifest,
                 release_version=RELEASE_VERSION,
             )
+
+            review_version = os.getenv(
+                "CRIMESCENE_E30_CONSENT_REVIEW_VERSION",
+                "",
+            ).strip()
+
+            if review_version:
+                release_checksum = "sha256:" + hashlib.sha256(
+                    json.dumps(
+                        manifest,
+                        sort_keys=True,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest()
+
+                def check_e30_approval(state):
+                    return django.get_e30_consent_approval(
+                        case_id=state.case_id,
+                        release_version=RELEASE_VERSION,
+                        release_checksum=release_checksum,
+                        review_version=review_version,
+                    )
+
+                app.state.e30_approval_check = check_e30_approval
+
+                print("E30 CONSENT REVIEW: CONFIGURED")
+
+            else:
+                print("E30 CONSENT REVIEW: NOT CONFIGURED")
 
             app.state.expanded_runtime_ready = True
 

@@ -207,6 +207,7 @@ def search_policy_scoped_multisource_candidates(
     published_holder_ids: tuple[str, ...] = (),
     rrf_k: int = 60,
     collection_name: str | None = None,
+    vector_query: str | None = None,
 ) -> list[FusedSearchCandidate]:
     """NPC별 접근 정책을 검색 전에 적용한 3중 RRF 검색.
 
@@ -285,6 +286,10 @@ def search_policy_scoped_multisource_candidates(
             if published_holder_ids else {}
         ),
         rrf_k=rrf_k,
+        **(
+            {"vector_query": vector_query}
+            if vector_query is not None else {}
+        ),
         **(
             {"collection_name": collection_name}
             if collection_name is not None

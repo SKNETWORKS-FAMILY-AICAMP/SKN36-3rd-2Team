@@ -343,3 +343,309 @@ def test_duplicate_input_rejected(client, embedder):
         )
 
     assert point_count(client) == 0
+
+
+# Issue #175 - revision2 BM25 synchronization
+
+from qdrant_client import models
+
+from crimescene.db.qdrant_collection import (
+    DENSE_VECTOR_NAME,
+    SPARSE_VECTOR_NAME,
+)
+from crimescene.db.qdrant_bm25 import (
+    build_corpus_sparse_vectors,
+    sparse_vectors_match,
+)
+from crimescene.retriever.versioned_retrieval import (
+    REVISION2_COLLECTION,
+)
+
+
+@pytest.fixture
+def hybrid_client(client):
+    ensure_qdrant_collection(
+        client,
+        collection_name=REVISION2_COLLECTION,
+    )
+    return client
+
+
+def run_hybrid_sync(client, embedder, records, **kwargs):
+    return run_sync(
+        client,
+        embedder,
+        records,
+        collection_name=REVISION2_COLLECTION,
+        **kwargs,
+    )
+
+
+def load_hybrid_point(client, record):
+    return client.retrieve(
+        collection_name=REVISION2_COLLECTION,
+        ids=[record.chunk.point_id],
+        with_payload=True,
+        with_vectors=True,
+    )[0]
+
+
+def test_revision2_initial_sync_stores_both_vectors(
+    hybrid_client,
+    embedder,
+):
+    records = [make_record(1), make_record(2)]
+
+    plan = run_hybrid_sync(
+        hybrid_client,
+        embedder,
+        records,
+        dry_run=False,
+    )
+
+    assert len(plan.added) == 2
+
+    expected = build_corpus_sparse_vectors(records)
+
+    for record in records:
+        point = load_hybrid_point(
+            hybrid_client, record
+        )
+
+        assert DENSE_VECTOR_NAME in point.vector
+        assert SPARSE_VECTOR_NAME in point.vector
+
+        assert sparse_vectors_match(
+            point.vector[SPARSE_VECTOR_NAME],
+            expected[record.chunk.point_id],
+        )
+
+
+def test_revision2_missing_sparse_dry_run(
+    hybrid_client,
+    embedder,
+):
+    record = make_record(1)
+
+    hybrid_client.upsert(
+        collection_name=REVISION2_COLLECTION,
+        points=[
+            build_qdrant_point(
+                record,
+                [0.1] * DENSE_VECTOR_SIZE,
+            ),
+        ],
+        wait=True,
+    )
+
+    plan = run_hybrid_sync(
+        hybrid_client,
+        embedder,
+        [record],
+        dry_run=True,
+    )
+
+    assert plan.sparse_updated == (
+        record.chunk.point_id,
+    )
+    assert plan.total_changes == 1
+    assert not plan.added
+    assert not plan.updated
+
+    point = load_hybrid_point(
+        hybrid_client, record
+    )
+
+    assert SPARSE_VECTOR_NAME not in point.vector
+
+    embedder.embed_texts.assert_not_called()
+
+
+def test_revision2_sparse_repair_preserves_dense_payload(
+    hybrid_client,
+    embedder,
+):
+    record = make_record(1)
+
+    hybrid_client.upsert(
+        collection_name=REVISION2_COLLECTION,
+        points=[
+            build_qdrant_point(
+                record,
+                [0.1] * DENSE_VECTOR_SIZE,
+            ),
+        ],
+        wait=True,
+    )
+
+    before = load_hybrid_point(
+        hybrid_client, record
+    )
+
+    plan = run_hybrid_sync(
+        hybrid_client,
+        embedder,
+        [record],
+        dry_run=False,
+    )
+
+    after = load_hybrid_point(
+        hybrid_client, record
+    )
+
+    assert len(plan.sparse_updated) == 1
+    assert before.payload == after.payload
+
+    assert (
+        before.vector[DENSE_VECTOR_NAME]
+        == after.vector[DENSE_VECTOR_NAME]
+    )
+
+    assert SPARSE_VECTOR_NAME in after.vector
+
+    embedder.embed_texts.assert_not_called()
+
+
+def test_revision2_sync_is_idempotent(
+    hybrid_client,
+    embedder,
+):
+    records = [make_record(1), make_record(2)]
+
+    run_hybrid_sync(
+        hybrid_client,
+        embedder,
+        records,
+        dry_run=False,
+    )
+
+    embedder.embed_texts.reset_mock()
+
+    plan = run_hybrid_sync(
+        hybrid_client,
+        embedder,
+        records,
+        dry_run=False,
+    )
+
+    assert plan.total_changes == 0
+    assert len(plan.unchanged) == 2
+    assert not plan.sparse_updated
+
+    embedder.embed_texts.assert_not_called()
+
+
+def test_revision2_corpus_change_reweights_sparse(
+    hybrid_client,
+    embedder,
+):
+    original = make_record(1)
+
+    run_hybrid_sync(
+        hybrid_client,
+        embedder,
+        [original],
+        dry_run=False,
+    )
+
+    before = load_hybrid_point(
+        hybrid_client, original
+    )
+
+    added = make_record(2)
+
+    added = replace(
+        added,
+        chunk=added.chunk.model_copy(
+            update={
+                "search_text": 'security investigation evidence access records building entrance surveillance incident timeline witness interview document verification report emergency exit inspection archive analysis',
+                "body": 'security investigation evidence access records building entrance surveillance incident timeline witness interview document verification report emergency exit inspection archive analysis',
+            }
+        ),
+    )
+
+    embedder.embed_texts.reset_mock()
+
+    records = [original, added]
+
+    plan = run_hybrid_sync(
+        hybrid_client,
+        embedder,
+        records,
+        dry_run=False,
+    )
+
+    after = load_hybrid_point(
+        hybrid_client, original
+    )
+
+    assert plan.added == (
+        added.chunk.point_id,
+    )
+
+    assert original.chunk.point_id in (
+        plan.sparse_updated
+    )
+
+    assert before.payload == after.payload
+
+    assert (
+        before.vector[DENSE_VECTOR_NAME]
+        == after.vector[DENSE_VECTOR_NAME]
+    )
+
+    expected = build_corpus_sparse_vectors(records)
+
+    assert sparse_vectors_match(
+        after.vector[SPARSE_VECTOR_NAME],
+        expected[original.chunk.point_id],
+    )
+
+    embedder.embed_texts.assert_called_once_with(
+        [added.chunk.search_text]
+    )
+
+
+def test_revision2_sparse_mismatch_detected(
+    hybrid_client,
+    embedder,
+):
+    record = make_record(1)
+
+    run_hybrid_sync(
+        hybrid_client,
+        embedder,
+        [record],
+        dry_run=False,
+    )
+
+    hybrid_client.update_vectors(
+        collection_name=REVISION2_COLLECTION,
+        points=[
+            models.PointVectors(
+                id=record.chunk.point_id,
+                vector={
+                    SPARSE_VECTOR_NAME: models.SparseVector(
+                        indices=[1],
+                        values=[999.0],
+                    ),
+                },
+            ),
+        ],
+        wait=True,
+    )
+
+    embedder.embed_texts.reset_mock()
+
+    plan = run_hybrid_sync(
+        hybrid_client,
+        embedder,
+        [record],
+        dry_run=True,
+    )
+
+    assert plan.sparse_updated == (
+        record.chunk.point_id,
+    )
+
+    embedder.embed_texts.assert_not_called()

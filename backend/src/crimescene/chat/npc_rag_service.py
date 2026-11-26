@@ -6,6 +6,12 @@ from dataclasses import dataclass
 from neo4j import Driver
 from qdrant_client import QdrantClient
 
+from crimescene.chat.npc_context_query import (
+    build_evidence_search_query,
+)
+from crimescene.chat.npc_evidence_dialogue import (
+    EvidenceDialogueContext,
+)
 from crimescene.chat.npc_behavior import build_npc_behavior_prompt
 from crimescene.chat.npc_persona import NPCPersona
 from crimescene.chat.npc_conversation_memory import (
@@ -167,6 +173,7 @@ def prepare_npc_chat_rag(
     evidence_top_k: int = 10,
     top_k: int = 10,
     use_memory_context: bool = False,
+    evidence_dialogue: EvidenceDialogueContext | None = None,
 ) -> NPCChatRAGResult:
     """현재 NPC에 한정된 Hybrid RAG 응답 계획을 생성한다.
 
@@ -276,6 +283,23 @@ def prepare_npc_chat_rag(
         except ValueError:
             search_question = question
 
+    vector_query = None
+
+    if evidence_dialogue is not None:
+        expanded = build_evidence_search_query(
+            question,
+            state=state,
+            character_id=character_id,
+            evidence_dialogue=evidence_dialogue,
+            evidence_rules=resources.evidence_rules,
+        )
+
+        if expanded != question:
+            vector_query = expanded
+
+        # Keep original graph and authorization query.
+        search_question = question
+
     candidates = search_policy_scoped_multisource_candidates(
         search_question,
         qdrant_client=resources.qdrant_client,
@@ -293,6 +317,10 @@ def prepare_npc_chat_rag(
         allowed_entity_ids=allowed_entity_ids,
         matched_topics=topics,
         candidate_k=candidate_k,
+        **(
+            {"vector_query": vector_query}
+            if vector_query is not None else {}
+        ),
         relation_top_k=relation_top_k,
         evidence_top_k=evidence_top_k,
         **graph_options,

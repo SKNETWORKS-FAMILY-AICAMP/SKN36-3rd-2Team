@@ -359,3 +359,32 @@ def test_invalid_embedding_dimension(client, embedder):
         )
 
     assert get_point_count(client) == 0
+
+
+def test_revision2_direct_ingest_rejected(client, embedder):
+    from crimescene.retriever.versioned_retrieval import (
+        REVISION2_COLLECTION,
+    )
+
+    ensure_qdrant_collection(
+        client,
+        collection_name=REVISION2_COLLECTION,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="requires sync_qdrant_records",
+    ):
+        upsert_hybrid_records(
+            [make_record(1)],
+            client=client,
+            embedder=embedder,
+            collection_name=REVISION2_COLLECTION,
+        )
+
+    assert client.count(
+        collection_name=REVISION2_COLLECTION,
+        exact=True,
+    ).count == 0
+
+    embedder.embed_texts.assert_not_called()

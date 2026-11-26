@@ -30,6 +30,11 @@ from crimescene.chat.npc_rag_service import (
     NPCRAGResources,
     prepare_npc_chat_rag,
 )
+from crimescene.chat.npc_pressure_dialogue import (
+    build_pressure_reply,
+    is_generic_pressure_question,
+    pressure_dialogue_enabled,
+)
 from crimescene.chat.npc_reaction import (
     build_npc_reaction_prompt,
     detect_npc_reaction,
@@ -153,7 +158,17 @@ def run_npc_chat(
         and is_memory_recall_question(query)
     )
 
-    if social_intent is not None or recall_requested:
+    pressure_requested = (
+        not evidence_turn
+        and pressure_dialogue_enabled(state)
+        and is_generic_pressure_question(query)
+    )
+
+    if (
+        social_intent is not None
+        or recall_requested
+        or pressure_requested
+    ):
         character_id = session_store.get_active_npc(state)
 
         if character_id is None:
@@ -166,7 +181,23 @@ def run_npc_chat(
             character_id,
         )
 
-        if recall_requested:
+        if pressure_requested:
+            emotion = derive_npc_emotional_state(
+                query,
+                state=state,
+                character_id=character_id,
+                history=history,
+                evidence_just_presented=False,
+            )
+
+            social_text = build_pressure_reply(
+                query,
+                state=state,
+                character_id=character_id,
+                emotion=emotion,
+            )
+
+        elif recall_requested:
             social_text = (
                 build_memory_recall_from_history(
                     character_id,
@@ -231,6 +262,10 @@ def run_npc_chat(
         session_store=session_store,
         resources=resources,
         matched_topics=topics,
+        **(
+            {"evidence_dialogue": evidence_dialogue}
+            if evidence_dialogue is not None else {}
+        ),
         **(
             {"use_memory_context": True}
             if (

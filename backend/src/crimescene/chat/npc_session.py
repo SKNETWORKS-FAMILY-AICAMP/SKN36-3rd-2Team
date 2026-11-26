@@ -25,6 +25,9 @@ from crimescene.chat.npc_memory_recall import (
     build_memory_recall_from_history,
     is_memory_recall_question,
 )
+from crimescene.chat.npc_pressure_dialogue import (
+    is_approved_pressure_reply,
+)
 from crimescene.chat.npc_social_dialogue import (
     is_approved_social_reply,
 )
@@ -408,6 +411,12 @@ class NPCSessionStore:
                 answer,
             )
             and not memory_recall
+            and not is_approved_pressure_reply(
+                character_id,
+                question,
+                answer,
+                state=state,
+            )
         ):
             raise ValueError("검증되지 않은 NPC 응답은 저장할 수 없습니다.")
 

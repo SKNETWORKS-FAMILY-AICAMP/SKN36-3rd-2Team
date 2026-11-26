@@ -187,3 +187,129 @@ class InternalInvestigationSceneView(InternalContentReleaseView):
             "title": scene.title,
             "scene_text": scene.scene_text,
         })
+
+
+def e30_review_digest(payload):
+    """Canonical checksum for independently reviewed content."""
+
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+class InternalE30ConsentReviewView(InternalContentReleaseView):
+    """Return consent UI approval without publishing E30 content."""
+
+    def get(self, request, case_id, version, review_version):
+        from .models import Scene
+
+        if case_id != "CASE-001" or version == review_version:
+            raise Http404
+
+        # Revalidate the original, immutable runtime release.
+        base = super().get(request, case_id, version).data
+
+        if "E30" in base["manifest"]["approved_evidence"]:
+            raise Http404
+
+        review = get_object_or_404(
+            ContentRelease.objects.select_related("case"),
+            case__case_id=case_id,
+            case__status=Case.Status.PUBLISHED,
+            version=review_version,
+        )
+
+        manifest = review.manifest
+
+        if not isinstance(manifest, dict):
+            raise Http404
+
+        if review.checksum != f"sha256:{e30_review_digest(manifest)}":
+            raise Http404
+
+        if manifest.get("consent_ui_approved") is not True:
+            raise Http404
+
+        evidence = get_object_or_404(
+            Evidence,
+            case=review.case,
+            evidence_id="E30",
+        )
+
+        scene = get_object_or_404(
+            Scene.objects.select_related("chapter"),
+            case=review.case,
+            scene_id="SC-0405",
+        )
+
+        if (
+            not is_runtime_approved(evidence)
+            or not is_runtime_approved(scene)
+            or scene.visibility != "UNLOCKED_ONLY"
+            or scene.chapter.code != "CH04"
+            or evidence.score != 3
+        ):
+            raise Http404
+
+        prerequisites = list(
+            evidence.prerequisites.order_by("evidence_id")
+            .values_list("evidence_id", flat=True)
+        )
+
+        if prerequisites != ["E14", "E16", "E18"]:
+            raise Http404
+
+        for item in (evidence, scene):
+            if item.metadata.get("content_version") != "case001_1120":
+                raise Http404
+
+        evidence_digest = e30_review_digest({
+            "evidence_id": evidence.evidence_id,
+            "name": evidence.name,
+            "score": evidence.score,
+            "prerequisites": prerequisites,
+            "source_sha256": evidence.metadata.get("source_sha256"),
+        })
+
+        scene_digest = e30_review_digest({
+            "scene_id": scene.scene_id,
+            "chapter": scene.chapter.code,
+            "title": scene.title,
+            "scene_text": scene.scene_text,
+            "source_sha256": scene.metadata.get("source_sha256"),
+        })
+
+        expected = {
+            "scope": "E30_CONSENT_REVIEW",
+            "case_id": case_id,
+            "content_version": "case001_1120",
+            "base_release_version": version,
+            "base_release_checksum": base["checksum"],
+            "evidence_id": "E30",
+            "scene_id": "SC-0405",
+            "chapter": "CH04",
+            "required_evidence": prerequisites,
+            "evidence_sha256": evidence_digest,
+            "scene_sha256": scene_digest,
+            "consent_ui_approved": True,
+        }
+
+        if manifest != expected:
+            raise Http404
+
+        response = Response({
+            "case_id": case_id,
+            "release_version": version,
+            "release_checksum": base["checksum"],
+            "review_version": review_version,
+            "approved": True,
+        })
+
+        response["Cache-Control"] = "private, no-store"
+
+        return response

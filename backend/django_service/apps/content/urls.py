@@ -78,3 +78,16 @@ urlpatterns += [
         name="internal-investigation-scene",
     ),
 ]
+
+
+
+from .release_views import InternalE30ConsentReviewView
+
+urlpatterns += [
+    path(
+        "internal/cases/<str:case_id>/releases/"
+        "<str:version>/e30-consent-reviews/<str:review_version>/",
+        InternalE30ConsentReviewView.as_view(),
+        name="internal-e30-consent-review",
+    ),
+]

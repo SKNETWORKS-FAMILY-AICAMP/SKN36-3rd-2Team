@@ -13,6 +13,12 @@ from fastapi import Cookie, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
+from crimescene.api.e30_consent_service import (
+    E30ConsentRequest,
+    e30_consent_available,
+    grant_e30_player_consent,
+)
+
 from crimescene.api.ending_image_service import (
     IMAGE_HEADERS,
     EndingImagesResponse,
@@ -140,6 +146,8 @@ class GameResponse(BaseModel):
 
     revision: int
     events: list[dict[str, str]]
+    e30ConsentAvailable: bool = False
+    e30ConsentGranted: bool = False
 
 
 class ContentChapterResponse(BaseModel):
@@ -712,6 +720,11 @@ def create_app(
             events=events if events is not None else [],
             currentChapter=state.current_chapter,
             unlockedChapters=list(state.unlocked_chapters),
+            e30ConsentAvailable=e30_consent_available(
+                state,
+                getattr(app.state, "e30_approval_check", None),
+            ),
+            e30ConsentGranted=state.e30_player_consent,
         )
 
     # ========================================================
@@ -1643,6 +1656,53 @@ def create_app(
                 result.state,
                 events=events,
             ),
+        )
+
+    @app.post(
+        "/api/games/{session_id}/evidence/E30/consent",
+        response_model=GameResponse,
+    )
+    def submit_e30_consent(
+        session_id: str,
+        payload: E30ConsentRequest,
+        request: Request,
+        case001_owner: str | None = Cookie(default=None),
+    ) -> JSONResponse:
+        state = load_owned_request(
+            session_id,
+            request,
+            case001_owner,
+        )
+
+        updated = grant_e30_player_consent(
+            state,
+            expected_revision=payload.expectedRevision,
+            consent=payload.consent,
+            approval_check=getattr(
+                request.app.state,
+                "e30_approval_check",
+                None,
+            ),
+        )
+
+        if updated != state:
+            try:
+                updated = repository.commit_state(
+                    expected_state=state,
+                    updated_state=updated,
+                )
+            except ValueError:
+                raise HTTPException(
+                    409,
+                    "Game state changed",
+                    headers={"Cache-Control": "private, no-store"},
+                ) from None
+
+        result = game_response(updated)
+
+        return JSONResponse(
+            content=result.model_dump(mode="json"),
+            headers={"Cache-Control": "private, no-store"},
         )
 
     @app.post(

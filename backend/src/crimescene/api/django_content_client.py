@@ -329,6 +329,71 @@ class DjangoContentClient:
 
         return overview
 
+    def get_e30_consent_approval(
+        self,
+        *,
+        case_id: str,
+        release_version: str,
+        release_checksum: str,
+        review_version: str,
+    ) -> bool:
+        '''Query independently reviewed E30 consent availability.'''
+
+        if case_id != "CASE-001":
+            return False
+
+        version_pattern = r"v(?:0|[1-9][0-9]*)[.](?:0|[1-9][0-9]*)[.](?:0|[1-9][0-9]*)"
+
+        for version in (release_version, review_version):
+            if (
+                not isinstance(version, str)
+                or len(version) > 30
+                or not re.fullmatch(version_pattern, version)
+            ):
+                return False
+
+        if release_version == review_version:
+            return False
+
+        if not isinstance(release_checksum, str) or not re.fullmatch(
+            r"sha256:[0-9a-f]{64}",
+            release_checksum,
+        ):
+            return False
+
+        path = (
+            f"api/content/internal/cases/{case_id}/releases/"
+            f"{release_version}/e30-consent-reviews/{review_version}/"
+        )
+
+        try:
+            response = self._client.get(path)
+
+            if response.status_code != 200:
+                return False
+
+            if len(response.content) > 4096:
+                return False
+
+            result = response.json()
+
+        except (httpx.RequestError, ValueError):
+            return False
+
+        expected = {
+            "case_id": case_id,
+            "release_version": release_version,
+            "release_checksum": release_checksum,
+            "review_version": review_version,
+            "approved": True,
+        }
+
+        return (
+            isinstance(result, dict)
+            and result.get("approved") is True
+            and result == expected
+        )
+
     def get_evidence_requirements(
         self,
         case_id: str,

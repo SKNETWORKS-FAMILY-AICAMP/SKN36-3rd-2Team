@@ -589,4 +589,19 @@ export const httpApi: GameApi = {
     )
     return res.accepted
   },
+
+  // 힌트 1단계. 횟수·점수 차감 없고 게임 상태도 바꾸지 않는다. revision이 어긋나면(409) 상태를 다시 읽고 한 번만 재시도한다.
+  getHint: async (sessionId: string): Promise<string> => {
+    const path = gamePath(sessionId)
+    const ask = async () => {
+      const game = await request<BackendGameState>(path)
+      return request<{ text: string }>(`${path}/agents/hint`, post({ expectedRevision: game.revision, level: 1 }))
+    }
+    try {
+      return (await ask()).text
+    } catch (error) {
+      if (!(error instanceof ApiHttpError && error.status === 409)) throw error
+      return (await ask()).text
+    }
+  },
 }

@@ -5,6 +5,8 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { FileSearch, Lightbulb, Lock, NotebookPen, Send, X } from 'lucide-react'
 
 import Objective from '../../components/Objective'
+import ConsentModal from '../../components/ConsentModal'
+import type { EmbedProps } from '../embed'
 import TopNav from '../../components/TopNav'
 import Toasts from '../../components/Toasts'
 import CharacterPortrait from '../../components/CharacterPortrait'
@@ -14,6 +16,7 @@ import { useGameStore } from '../../store/gameStore'
 import { useChatStore } from '../../store/chatStore'
 import { useNoteStore } from '../../store/noteStore'
 import { api } from '../../api/client'
+import { ApiHttpError } from '../../api/httpApi'
 
 import type { AvailableEvidence } from '../../api/types'
 import styles from './Chat.module.css'
@@ -22,11 +25,15 @@ const EMPTY: never[] = []
 
 // Issue #59: NPC 대화 입력 최대 길이
 const MAX_MESSAGE_LENGTH = 200
+const CONSENT_DECLINED_KEY = 'serin-consent-declined'
 
-export default function Chat() {
-  const { npcId } = useParams()
+export default function Chat({ embedded = false, npcId: npcProp, onNpcSelect }: EmbedProps & { npcId?: string } = {}) {
+  const params = useParams()
+  const npcId = npcProp ?? params.npcId
   const navigate = useNavigate()
   const { search } = useLocation()
+  // 인물 이동: 통합 화면이면 Play에 맡기고, 독립 화면이면 주소를 바꾼다
+  const selectNpc = (id: string) => (onNpcSelect ? onNpcSelect(id) : navigate({ pathname: `/chat/${id}`, search }))
 
   const session = useGameStore((s) => s.session)
   const ensure = useGameStore((s) => s.ensureSession)
@@ -56,6 +63,37 @@ export default function Chat() {
   const [pickOpen, setPickOpen] = useState(false)
   // 제시할 증거: 고르면 입력창 위에 표시되고, 다음 전송 때 질문과 함께 보낸다
   const [picked, setPicked] = useState<string | null>(null)
+  // 열람 동의: 서버가 동의 가능하다고 하고, 아직 동의·거절하지 않았을 때만 띄운다. 거절은 이번 게임(세션) 동안 기억한다
+  const refresh = useGameStore((s) => s.refresh)
+  const [declinedSid, setDeclinedSid] = useState<string | null>(() => {
+    try { return localStorage.getItem(CONSENT_DECLINED_KEY) } catch { return null }
+  })
+  const [consentBusy, setConsentBusy] = useState(false)
+  const [consentError, setConsentError] = useState<string | null>(null)
+  const consentOpen = !!session?.consentAvailable && !session.consentGranted && declinedSid !== session.sessionId
+  const declineConsent = () => {
+    if (!session) return
+    try { localStorage.setItem(CONSENT_DECLINED_KEY, session.sessionId) } catch { /* ignore */ }
+    setDeclinedSid(session.sessionId)
+  }
+  const agreeConsent = async () => {
+    if (!session || consentBusy) return
+    setConsentBusy(true)
+    setConsentError(null)
+    try {
+      await api.giveConsent(session.sessionId)
+      await refresh()
+    } catch (error) {
+      if (error instanceof ApiHttpError && error.status === 409) {
+        await refresh().catch(() => undefined)
+        setConsentError('지금은 동의할 수 없는 상태입니다. 게임 상태를 다시 불러왔습니다.')
+      } else {
+        setConsentError('동의를 저장하지 못했습니다. 잠시 후 다시 눌러 주세요.')
+      }
+    } finally {
+      setConsentBusy(false)
+    }
+  }
   // 힌트 1단계: 서버가 준 문장을 입력창 위에 보여 준다
   const [hint, setHint] = useState<{ text: string; error?: boolean } | null>(null)
   const [hintBusy, setHintBusy] = useState(false)
@@ -240,6 +278,14 @@ export default function Chat() {
     [npcId],
   )
 
+  // 통합 화면에서 인물이 없거나 아직 못 만나는 인물이면, 주소 이동 대신 마지막(또는 첫) 인물을 Play에 알린다
+  const roomInvalid = !npcId || !npc || (!!session && !unlocked.includes(npcId))
+  useEffect(() => {
+    if (embedded && session && roomInvalid) onNpcSelect?.(lastRoom())
+  }, [embedded, session, roomInvalid])
+
+  if (embedded && roomInvalid) return <Shell embedded />
+
   if (!npcId) {
     return session ? (
       <Navigate
@@ -308,10 +354,10 @@ export default function Chat() {
   }
 
   return (
-    <div className={styles.page} style={{ backgroundImage: `linear-gradient(rgba(10,9,8,.6), rgba(10,9,8,.8)), url(${MEETING_BG})` }}>
-      <TopNav />
-      <Toasts />
-      <Objective />
+    <div className={`${styles.page} ${embedded ? styles.embedded : ''}`} style={{ backgroundImage: `linear-gradient(rgba(10,9,8,.6), rgba(10,9,8,.8)), url(${MEETING_BG})` }}>
+      {!embedded && <TopNav />}
+      <ConsentModal open={consentOpen} busy={consentBusy} error={consentError} onAgree={() => void agreeConsent()} onDecline={declineConsent} />
+      {!embedded && <><Toasts /><Objective /></>}
 
       {/* ======================================================
           인물 선택
@@ -337,12 +383,7 @@ export default function Chat() {
                   active ? styles.current : '',
                   open ? '' : styles.locked,
                 ].join(' ')}
-                onClick={() =>
-                  navigate({
-                    pathname: `/chat/${n.id}`,
-                    search,
-                  })
-                }
+                onClick={() => selectNpc(n.id)}
                 aria-current={active}
                 aria-label={
                   open
@@ -808,10 +849,10 @@ export default function Chat() {
   )
 }
 
-function Shell() {
+function Shell({ embedded = false }: { embedded?: boolean }) {
   return (
-    <div className={styles.page}>
-      <TopNav />
+    <div className={`${styles.page} ${embedded ? styles.embedded : ''}`}>
+      {!embedded && <TopNav />}
     </div>
   )
 }

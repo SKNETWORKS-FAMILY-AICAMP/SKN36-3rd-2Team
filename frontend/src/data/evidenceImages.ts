@@ -1,8 +1,11 @@
 /**
  * CASE-001 증거 사진 연결
  * 현재 게임 프론트엔드의 evidencePhoto(sessionId, evidenceId) 인터페이스를 유지합니다.
- * 사진은 획득된 증거에 대해서만 화면에 렌더링되지만, 정적 파일 URL 자체는 공개됩니다.
+ * 기본 증거 10개는 공개 폴더 파일, 그 밖의 증거는 서버 사진 API를 쓴다.
+ * 서버 사진은 획득한 증거만 내려오고, 사진이 없으면 404라 화면에서 숨긴다.
  */
+import { evidencePhotoUrl } from '../api/httpApi'
+
 type EvidencePhoto = { src: string; thumb: string; caption: string }
 
 const evidenceAssets: Readonly<Record<string, { file: string; caption: string }>> = {
@@ -26,7 +29,9 @@ const asset = (filename: string) => `${assetBase}assets/evidence/${filename}.web
 export function evidencePhoto(sessionId: string | undefined, id: string): EvidencePhoto | undefined {
   if (!sessionId) return undefined
   const photo = evidenceAssets[id]
-  if (!photo) return undefined
+  if (!photo) {
+    return { src: evidencePhotoUrl(sessionId, id), thumb: evidencePhotoUrl(sessionId, id, true), caption: '확보 자료 사진' }
+  }
   return {
     src: asset(photo.file),
     thumb: asset(`t_${photo.file}`),

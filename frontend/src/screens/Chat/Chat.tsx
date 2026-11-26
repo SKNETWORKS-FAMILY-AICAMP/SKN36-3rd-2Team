@@ -9,7 +9,7 @@ import TopNav from '../../components/TopNav'
 import Toasts from '../../components/Toasts'
 import CharacterPortrait from '../../components/CharacterPortrait'
 
-import { NPC_PUBLIC } from '../../data/characters'
+import { MEETING_BG, NPC_PUBLIC } from '../../data/characters'
 import { useGameStore } from '../../store/gameStore'
 import { useChatStore } from '../../store/chatStore'
 import { useNoteStore } from '../../store/noteStore'
@@ -46,10 +46,16 @@ export default function Chat() {
   const retry = useChatStore((s) => s.retry)
   const canRetry = useChatStore((s) => s.canRetry)
   const send = useChatStore((s) => s.send)
+  // 진술 저장: 메시지 id는 새로고침하면 바뀌므로 인물+내용으로 구분한다
+  const statements = useNoteStore((s) => s.statements)
+  const toggleStatement = useNoteStore((s) => s.toggleStatement)
+  const savedIds = useMemo(() => new Set(statements.map((s) => s.id)), [statements])
   const present = useChatStore((s) => s.present)
 
   const [text, setText] = useState('')
   const [pickOpen, setPickOpen] = useState(false)
+  // 제시할 증거: 고르면 입력창 위에 표시되고, 다음 전송 때 질문과 함께 보낸다
+  const [picked, setPicked] = useState<string | null>(null)
   const [available, setAvailable] = useState<AvailableEvidence[]>([])
   const [collecting, setCollecting] = useState<string | null>(null)
   const collectingRef = useRef(false)
@@ -72,6 +78,13 @@ export default function Chat() {
       void load(npcId)
     }
   }, [sid, npcId, load])
+
+  // 인물을 바꾸면 골라 둔 증거를 지운다 (다른 인물에게 잘못 제시되지 않게)
+  const [pickedFor, setPickedFor] = useState(npcId)
+  if (pickedFor !== npcId) {
+    setPickedFor(npcId)
+    setPicked(null)
+  }
 
   // 다른 인물과의 대화 여부를 미리 불러옵니다.
   useEffect(() => {
@@ -261,7 +274,7 @@ export default function Chat() {
     const question = text.trim()
 
     if (
-      !question ||
+      (!question && !picked) ||
       question.length > MAX_MESSAGE_LENGTH ||
       busy ||
       !session
@@ -270,11 +283,16 @@ export default function Chat() {
     }
 
     setText('')
-    void send(npcId, question)
+    if (picked) {
+      setPicked(null)
+      void present(npcId, picked, evidence[picked]?.title ?? picked, question || undefined)
+    } else {
+      void send(npcId, question)
+    }
   }
 
   return (
-    <div className={styles.page}>
+    <div className={styles.page} style={{ backgroundImage: `linear-gradient(rgba(10,9,8,.6), rgba(10,9,8,.8)), url(${MEETING_BG})` }}>
       <TopNav />
       <Toasts />
       <Objective />
@@ -511,6 +529,16 @@ export default function Chat() {
                   <p className={styles.bubble}>
                     {message.text}
                   </p>
+                  {message.role === 'npc' && (
+                    <button
+                      type="button"
+                      className={styles.saveBtn}
+                      aria-pressed={savedIds.has(`${npc.id}:${message.text}`)}
+                      onClick={() => toggleStatement({ id: `${npc.id}:${message.text}`, npcId: npc.id, text: message.text })}
+                    >
+                      {savedIds.has(`${npc.id}:${message.text}`) ? '저장됨 ✓' : '진술 저장'}
+                    </button>
+                  )}
                 </div>
               </div>
             ))}
@@ -575,6 +603,14 @@ export default function Chat() {
               submit()
             }}
           >
+            {picked && (
+              <p className={styles.picked}>
+                <FileSearch size={14} />
+                제시할 증거: <b>{evidence[picked]?.title ?? picked}</b>
+                <span>질문을 함께 적거나 그대로 보내세요.</span>
+                <button type="button" onClick={() => setPicked(null)} aria-label="제시할 증거 취소"><X size={14} /></button>
+              </p>
+            )}
             <button
               type="button"
               className="btn"
@@ -639,7 +675,7 @@ export default function Chat() {
               className={styles.send}
               disabled={
                 busy ||
-                !text.trim() ||
+                (!text.trim() && !picked) ||
                 text.length > MAX_MESSAGE_LENGTH
               }
               aria-label="보내기"
@@ -710,12 +746,7 @@ export default function Chat() {
                         type="button"
                         onClick={() => {
                           setPickOpen(false)
-
-                          void present(
-                            npcId,
-                            id,
-                            evidence[id]?.title ?? id,
-                          )
+                          setPicked(id)
                         }}
                       >
                         <FileSearch size={16} />

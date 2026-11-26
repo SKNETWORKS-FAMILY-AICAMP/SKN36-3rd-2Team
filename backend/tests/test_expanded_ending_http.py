@@ -1,4 +1,4 @@
-﻿"""Issue #165 - expanded ending API integration tests."""
+"""Issue #165 - expanded ending API integration tests."""
 
 from types import SimpleNamespace
 
@@ -333,3 +333,361 @@ def test_ending_hidden_before_finish(runtime):
     )
 
     assert response.status_code == 409
+
+
+# Issue #191 - protected ending images
+
+@pytest.fixture
+def private_ending_images(tmp_path, monkeypatch):
+    directory = tmp_path / "private-ending-images"
+    directory.mkdir()
+
+    # Synthetic transport fixtures, not actual spoiler images.
+    images = {
+        name: b"\x89PNG\r\n\x1a\n" + name.encode("ascii")
+        for name in (
+            "deep_album_blank.png",
+            "deep_album_filled.png",
+            "escaped.png",
+        )
+    }
+
+    for name, content in images.items():
+        (directory / name).write_bytes(content)
+
+    monkeypatch.setenv(
+        "CRIMESCENE_ENDING_IMAGE_DIR",
+        str(directory),
+    )
+
+    return directory, images
+
+
+def assert_private_image_headers(response):
+    assert response.headers["cache-control"] == "private, no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
+
+
+def finish_image_test_game(runtime, code):
+    if code == "NO_EVIDENCE":
+        prepare(runtime, full=False)
+
+        _, client, repository, sid, _ = runtime
+
+        response = client.post(
+            f"/api/games/{sid}/give-up",
+            json={
+                "expectedRevision":
+                    repository.load_state(sid).revision,
+            },
+        )
+        assert response.status_code == 200
+
+    elif code == "UNSOLVED":
+        prepare(runtime)
+
+        for _ in range(3):
+            assert accuse(runtime, "C01").status_code == 200
+
+    elif code == "ESTIMATED":
+        prepare(runtime)
+        assert accuse(runtime).status_code == 200
+
+    elif code == "FULL":
+        prepare(runtime)
+        assert reconstruct(runtime).status_code == 200
+        assert accuse(runtime).status_code == 200
+
+    elif code == "DEEP":
+        prepare(runtime, deep=True, flags=DEEP_FLAGS)
+        assert reconstruct(runtime).status_code == 200
+        assert accuse(runtime).status_code == 200
+
+    else:
+        raise ValueError("Invalid ending code")
+
+    assert ending(runtime)["outcome"] == code
+
+
+@pytest.mark.parametrize(
+    ("code", "expected_names"),
+    [
+        ("NO_EVIDENCE", ()),
+        ("UNSOLVED", ("escaped.png",)),
+        ("ESTIMATED", ()),
+        ("FULL", ()),
+        ("DEEP", (
+            "deep_album_blank.png",
+            "deep_album_filled.png",
+        )),
+    ],
+)
+def test_protected_images_for_each_ending(
+    runtime,
+    private_ending_images,
+    code,
+    expected_names,
+):
+    _, client, repository, sid, _ = runtime
+    _, images = private_ending_images
+
+    finish_image_test_game(runtime, code)
+
+    before = repository.load_state(sid)
+    base = f"/api/games/{sid}/ending/images"
+
+    response = client.get(base)
+
+    assert response.status_code == 200
+    assert_private_image_headers(response)
+
+    assert response.json() == {
+        "endingCode": code,
+        "images": [
+            {
+                "index": index,
+                "url": f"{base}/{index}",
+            }
+            for index in range(1, len(expected_names) + 1)
+        ],
+    }
+
+    for index, name in enumerate(expected_names, start=1):
+        response = client.get(f"{base}/{index}")
+
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "image/png"
+        assert response.content == images[name]
+        assert_private_image_headers(response)
+
+    for index in (0, -1, len(expected_names) + 1, 999):
+        response = client.get(f"{base}/{index}")
+        assert response.status_code == 404
+        assert_private_image_headers(response)
+
+    # Read-only API must not change the game state.
+    assert repository.load_state(sid) == before
+
+
+def test_protected_images_before_finish(
+    runtime,
+    private_ending_images,
+):
+    _, client, repository, sid, _ = runtime
+
+    before = repository.load_state(sid)
+    base = f"/api/games/{sid}/ending/images"
+
+    for url in (base, f"{base}/1", f"{base}/2"):
+        response = client.get(url)
+        assert response.status_code == 409
+        assert_private_image_headers(response)
+
+    assert repository.load_state(sid) == before
+
+
+def test_protected_images_without_ownership(
+    runtime,
+    private_ending_images,
+):
+    app, _, _, sid, _ = runtime
+
+    finish_image_test_game(runtime, "DEEP")
+
+    base = f"/api/games/{sid}/ending/images"
+
+    with TestClient(app) as outsider:
+        for url in (base, f"{base}/1", f"{base}/2"):
+            response = outsider.get(url)
+            assert response.status_code == 404
+            assert_private_image_headers(response)
+
+        # Ownership of another game does not grant access.
+        assert outsider.post("/api/games").status_code == 201
+
+        for url in (base, f"{base}/1"):
+            response = outsider.get(url)
+            assert response.status_code == 404
+            assert_private_image_headers(response)
+
+
+def test_protected_images_ignore_client_ending_override(
+    runtime,
+    private_ending_images,
+):
+    _, client, _, sid, _ = runtime
+    _, images = private_ending_images
+
+    finish_image_test_game(runtime, "UNSOLVED")
+
+    base = f"/api/games/{sid}/ending/images"
+
+    response = client.get(
+        f"{base}/1",
+        params={
+            "endingCode": "DEEP",
+            "filename": "deep_album_filled.png",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.content == images["escaped.png"]
+
+    assert client.get(f"{base}/2").status_code == 404
+
+
+def test_protected_image_missing_file(
+    runtime,
+    private_ending_images,
+):
+    _, client, _, sid, _ = runtime
+    directory, _ = private_ending_images
+
+    finish_image_test_game(runtime, "DEEP")
+
+    (directory / "deep_album_filled.png").unlink()
+
+    base = f"/api/games/{sid}/ending/images"
+
+    assert client.get(base).status_code == 404
+    assert client.get(f"{base}/2").status_code == 404
+
+
+def test_protected_image_path_escape(
+    runtime,
+    private_ending_images,
+    tmp_path,
+):
+    _, client, _, sid, _ = runtime
+    directory, _ = private_ending_images
+
+    finish_image_test_game(runtime, "DEEP")
+
+    outside = tmp_path / "outside.png"
+    outside.write_bytes(b"PRIVATE TEST CONTENT")
+
+    image = directory / "deep_album_blank.png"
+    image.unlink()
+
+    try:
+        image.symlink_to(outside)
+    except OSError:
+        pytest.skip("Symbolic links unavailable on this system")
+
+    response = client.get(
+        f"/api/games/{sid}/ending/images/1"
+    )
+
+    assert response.status_code == 404
+    assert b"PRIVATE TEST CONTENT" not in response.content
+
+
+@pytest.mark.parametrize("outside_directory", [True, False])
+def test_protected_image_resolved_path_denied(
+    runtime,
+    private_ending_images,
+    tmp_path,
+    monkeypatch,
+    outside_directory,
+):
+    """Verify resolved-path rejection without symlink privileges."""
+    from pathlib import Path
+
+    _, client, _, sid, _ = runtime
+    directory, _ = private_ending_images
+
+    finish_image_test_game(runtime, "DEEP")
+
+    directory = directory.resolve()
+    candidate = directory / "deep_album_blank.png"
+
+    alternative = (
+        tmp_path / "outside.png"
+        if outside_directory
+        else directory / "deep_album_filled.png"
+    ).resolve()
+
+    if outside_directory:
+        alternative.write_bytes(b"PRIVATE TEST CONTENT")
+
+    original_resolve = Path.resolve
+
+    def simulated_resolve(self, *args, **kwargs):
+        if self == candidate:
+            return alternative
+        return original_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", simulated_resolve)
+
+    response = client.get(
+        f"/api/games/{sid}/ending/images/1"
+    )
+
+    assert response.status_code == 404
+    assert_private_image_headers(response)
+    assert b"PRIVATE TEST CONTENT" not in response.content
+
+
+@pytest.mark.parametrize(
+    ("code", "names"),
+    [
+        ("DEEP", (
+            "deep_album_blank.png",
+            "deep_album_filled.png",
+        )),
+        ("UNSOLVED", ("escaped.png",)),
+    ],
+)
+def test_real_private_ending_image_delivery(
+    runtime,
+    monkeypatch,
+    code,
+    names,
+):
+    """Opt-in verification of privately supplied PNG assets."""
+    import os
+    import hashlib
+    from pathlib import Path
+
+    if os.getenv("RUN_PRIVATE_IMAGE_INTEGRATION") != "1":
+        pytest.skip("Private image integration is opt-in")
+
+    directory = (
+        Path(__file__).resolve().parents[1]
+        / ".local"
+        / "case001_ending_images"
+    )
+
+    monkeypatch.setenv(
+        "CRIMESCENE_ENDING_IMAGE_DIR",
+        str(directory),
+    )
+
+    _, client, repository, sid, _ = runtime
+
+    finish_image_test_game(runtime, code)
+
+    before = repository.load_state(sid)
+    base = f"/api/games/{sid}/ending/images"
+
+    listing = client.get(base)
+
+    assert listing.status_code == 200
+    assert_private_image_headers(listing)
+    assert listing.json()["endingCode"] == code
+    assert len(listing.json()["images"]) == len(names)
+
+    for index, name in enumerate(names, start=1):
+        expected = (directory / name).read_bytes()
+
+        response = client.get(f"{base}/{index}")
+
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "image/png"
+        assert_private_image_headers(response)
+
+        assert hashlib.sha256(response.content).digest() == (
+            hashlib.sha256(expected).digest()
+        )
+
+    assert repository.load_state(sid) == before

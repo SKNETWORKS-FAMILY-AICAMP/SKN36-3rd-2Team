@@ -11,7 +11,14 @@ from pathlib import Path
 
 from fastapi import Cookie, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
+
+from crimescene.api.ending_image_service import (
+    IMAGE_HEADERS,
+    EndingImagesResponse,
+    build_ending_images_response,
+    resolve_ending_image,
+)
 from mcp.server import MCPServer
 from neo4j.exceptions import Neo4jError, ServiceUnavailable, SessionExpired
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -2377,6 +2384,69 @@ def create_app(
     # ========================================================
     # API: 게임 엔딩 조회
     # ========================================================
+
+    def load_owned_ending_image_state(
+        session_id: str,
+        request: Request,
+        cookie: str | None,
+    ) -> GameState:
+        try:
+            return load_owned_request(session_id, request, cookie)
+        except HTTPException as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail=exc.detail,
+                headers={
+                    **(exc.headers or {}),
+                    **IMAGE_HEADERS,
+                },
+            ) from exc
+
+    @app.get(
+        "/api/games/{session_id}/ending/images",
+        response_model=EndingImagesResponse,
+    )
+    def get_ending_images(
+        session_id: str,
+        request: Request,
+        case001_owner: str | None = Cookie(default=None),
+    ) -> JSONResponse:
+        state = load_owned_ending_image_state(
+            session_id,
+            request,
+            case001_owner,
+        )
+
+        result = build_ending_images_response(state)
+
+        return JSONResponse(
+            content=result.model_dump(mode="json"),
+            headers=dict(IMAGE_HEADERS),
+        )
+
+    @app.get(
+        "/api/games/{session_id}/ending/images/{image_index}",
+        response_class=FileResponse,
+    )
+    def get_ending_image(
+        session_id: str,
+        image_index: int,
+        request: Request,
+        case001_owner: str | None = Cookie(default=None),
+    ) -> FileResponse:
+        state = load_owned_ending_image_state(
+            session_id,
+            request,
+            case001_owner,
+        )
+
+        path = resolve_ending_image(state, image_index)
+
+        return FileResponse(
+            path=path,
+            media_type="image/png",
+            headers=dict(IMAGE_HEADERS),
+        )
 
     @app.get(
         "/api/games/{session_id}/ending",

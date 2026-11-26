@@ -75,3 +75,6 @@
 .paperCompact .body { font-size: 15px; line-height: 1.75; }
 .docBlock + .docBlock { margin-top: 14px; padding-top: 12px; border-top: 1px dashed rgba(60,45,25,.3); }
 .docBlock h3 { font-size: 14px; margin: 0 0 6px; color: #5a4a35; }
+
+/* /play 통합 화면 안에서는 부모 칸 높이에 맞춘다 */
+.embedded { height: 100%; min-height: 0; }

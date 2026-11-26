@@ -142,3 +142,6 @@ li:nth-child(even) .polaroid { transform: rotate(1.4deg); }
 /* 힌트 1단계 (제시할 증거 표시와 같은 모양, 색만 다르게) */
 .hintBox { border-left-color: var(--paper-300); }
 .picked .hintText { color: var(--paper-100); line-height: 1.6; }
+
+/* /play 통합 화면 안에서는 부모 칸 높이에 맞춘다 */
+.embedded { height: 100%; min-height: 0; }

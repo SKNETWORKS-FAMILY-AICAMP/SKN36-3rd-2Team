@@ -11,6 +11,7 @@ import { SHOW_COLLECTION_PERCENT } from '../../config'
 import { useGameStore } from '../../store/gameStore'
 import type { EvidenceDetail } from '../../api/types'
 import styles from './Evidence.module.css'
+import type { EmbedProps } from '../embed'
 
 const ROUTE_LABEL: Record<NonNullable<EvidenceDetail['acquiredBy']>, string> = {
   question: '질문으로 확보',
@@ -48,7 +49,7 @@ function EvidencePhotoFigure({ sessionId, id }: { sessionId?: string; id: string
   )
 }
 
-export default function Evidence() {
+export default function Evidence({ embedded = false, onNpcSelect }: EmbedProps = {}) {
   const navigate = useNavigate()
   const session = useGameStore((s) => s.session)
   const ensure = useGameStore((s) => s.ensureSession)
@@ -88,9 +89,8 @@ export default function Evidence() {
   const pct = coll && coll.total > 0 ? Math.round((coll.score / coll.total) * 100) : 0
 
   return (
-    <div className={styles.page}>
-      <TopNav />
-      <Toasts />
+    <div className={`${styles.page} ${embedded ? styles.embedded : ''}`}>
+      {!embedded && <><TopNav /><Toasts /></>}
       <main className={styles.main}>
         <section className={styles.desk} aria-label="증거 목록">
           <header className={`${styles.head} page-head`}>
@@ -234,7 +234,7 @@ export default function Evidence() {
                 <div>
                   <dt>보유 인물</dt>
                   <dd>
-                    <button type="button" className={styles.who} onClick={() => navigate(`/chat/${detail.holderId}`)}>
+                    <button type="button" className={styles.who} onClick={() => (onNpcSelect ? onNpcSelect(detail.holderId) : navigate(`/chat/${detail.holderId}`))}>
                       <CharacterPortrait id={detail.holderId} alt="" className={styles.mini} />
                       {npcName(detail.holderId)}
                     </button>

@@ -5,7 +5,7 @@ import TopNav from '../../components/TopNav'
 import Toasts from '../../components/Toasts'
 import { evidencePhoto } from '../../data/evidenceImages'
 import CharacterPortrait from '../../components/CharacterPortrait'
-import { EVIDENCE_SLOTS } from '../../data/publicData'
+import { evidenceSlots } from '../../data/publicData'
 import { npcName } from '../../data/characters'
 import { SHOW_COLLECTION_PERCENT } from '../../config'
 import { useGameStore } from '../../store/gameStore'
@@ -17,6 +17,29 @@ const ROUTE_LABEL: Record<NonNullable<EvidenceDetail['acquiredBy']>, string> = {
   present: '증거 제시로 확보',
   initial: '현장에서 확보',
 }
+const routeLabel = (d: EvidenceDetail) => (d.acquiredBy ? ROUTE_LABEL[d.acquiredBy] : '서버 기록 미제공')
+
+/** 획득 경로·보유 인물 요약 칩 (상세·비교 공용) */
+function EvidenceChips({ detail }: { detail: EvidenceDetail }) {
+  return (
+    <p className={styles.chips} aria-label="증거 요약">
+      <span>{routeLabel(detail)}</span>
+      <span>보유 · {npcName(detail.holderId)}</span>
+    </p>
+  )
+}
+
+/** 증거 사진 (상세·비교 공용). 이미지가 없거나 못 불러오면 숨긴다 */
+function EvidencePhotoFigure({ sessionId, id }: { sessionId?: string; id: string }) {
+  const ph = evidencePhoto(sessionId, id)
+  if (!ph) return null
+  return (
+    <figure className={styles.prop}>
+      <img src={ph.src} alt="" draggable={false} onError={(e) => { (e.currentTarget.parentElement as HTMLElement).style.display = 'none' }} />
+      <figcaption>{ph.caption}</figcaption>
+    </figure>
+  )
+}
 
 export default function Evidence() {
   const navigate = useNavigate()
@@ -26,11 +49,15 @@ export default function Evidence() {
   const loadEvidence = useGameStore((s) => s.loadEvidence)
   const [selected, setSelected] = useState<string | null>(null)
   const [docIdx, setDocIdx] = useState(0)
+  // 증거 비교: 켜면 증거를 최대 2개까지 골라 나란히 본다. 3번째를 고르면 먼저 고른 것이 빠진다.
+  const [compareMode, setCompareMode] = useState(false)
+  const [picks, setPicks] = useState<string[]>([])
   // 처음 들어올 때의 '새 증거' 목록을 기억해 NEW 표시를 하고, 내비게이션 점은 지운다
 
   useEffect(() => { void ensure() }, [ensure])
 
   const found = session?.foundEvidence ?? []
+  const slots = evidenceSlots(session?.evidenceTotal)
   const foundKey = found.join(',')
   useEffect(() => {
     found.forEach((id) => void loadEvidence(id))
@@ -38,6 +65,18 @@ export default function Evidence() {
   }, [foundKey, session?.sessionId])
 
   const detail = selected ? cache[selected] : undefined
+  const canCompare = found.length >= 2
+
+  const toggleCompare = () => {
+    setCompareMode((on) => !on)
+    // 비교를 시작할 때 이미 보고 있던 증거를 첫 번째로 넣어 준다
+    setPicks(!compareMode && selected ? [selected] : [])
+  }
+
+  const pickItem = (id: string) => {
+    if (!compareMode) { setSelected(id); setDocIdx(0); return }
+    setPicks((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id].slice(-2)))
+  }
   const coll = session?.collection
   const pct = coll && coll.total > 0 ? Math.round((coll.score / coll.total) * 100) : 0
 
@@ -56,19 +95,34 @@ export default function Evidence() {
               <div className={styles.meter} aria-label={`수집률 ${pct}퍼센트`}>
                 <span className={styles.pct}>{pct}<small>%</small></span>
                 <span className={styles.bar}><i style={{ width: `${pct}%` }} /></span>
-                <span className={styles.lbl}>수집률 · 확보 {found.length} / {EVIDENCE_SLOTS.length}</span>
+                <span className={styles.lbl}>수집률 · 확보 {found.length} / {slots.length}</span>
               </div>
             ) : (
               <div className={styles.meter} aria-label={`확보 ${found.length}개`}>
-                <span className={styles.pct}>{found.length}<small> / {EVIDENCE_SLOTS.length}</small></span>
-                <span className={styles.bar}><i style={{ width: `${(found.length / EVIDENCE_SLOTS.length) * 100}%` }} /></span>
+                <span className={styles.pct}>{found.length}<small> / {slots.length}</small></span>
+                <span className={styles.bar}><i style={{ width: `${(found.length / slots.length) * 100}%` }} /></span>
                 <span className={styles.lbl}>확보한 증거</span>
               </div>
             )}
+            <div className={styles.compareBar}>
+              <button
+                type="button"
+                className={`btn ${compareMode ? 'btn--primary' : ''}`}
+                onClick={toggleCompare}
+                disabled={!canCompare && !compareMode}
+                aria-pressed={compareMode}
+                title={canCompare ? undefined : '증거를 2개 이상 확보하면 비교할 수 있습니다.'}
+              >
+                {compareMode ? '비교 끝내기' : '증거 비교'}
+              </button>
+              {compareMode && (
+                <span className={styles.compareHint} aria-live="polite">비교할 증거를 2개까지 고르세요 · {picks.length} / 2</span>
+              )}
+            </div>
           </header>
 
           <ul className={styles.grid}>
-            {EVIDENCE_SLOTS.map((id, i) => {
+            {slots.map((id, i) => {
               const has = found.includes(id)
               const d = cache[id]
               return (
@@ -76,11 +130,13 @@ export default function Evidence() {
                   <button
                     type="button"
                     disabled={!has}
-                    className={`${styles.item} ${has ? styles.have : styles.lost} ${selected === id ? styles.sel : ''}`}
-                    onClick={() => { setSelected(id); setDocIdx(0) }}
+                    className={`${styles.item} ${has ? styles.have : styles.lost} ${(compareMode ? picks.includes(id) : selected === id) ? styles.sel : ''}`}
+                    onClick={() => pickItem(id)}
+                    aria-pressed={compareMode ? picks.includes(id) : undefined}
                     aria-label={has ? (d?.title ?? id) : '아직 확보하지 못한 증거'}
                   >
                     <span className={styles.no}>{id}</span>
+                    {compareMode && picks.includes(id) && <i className={styles.pickNo}>{picks.indexOf(id) + 1}</i>}
                     {has && d && evidencePhoto(session?.sessionId, id) ? (
                       <img className={styles.thumb} src={evidencePhoto(session?.sessionId, id)!.thumb} alt="" loading="lazy" draggable={false} />
                     ) : has ? <FileText size={28} /> : <Lock size={24} />}
@@ -92,8 +148,38 @@ export default function Evidence() {
           </ul>
         </section>
 
-        <aside className={styles.viewer} aria-label="증거 상세">
-          {!detail ? (
+        <aside className={styles.viewer} aria-label={compareMode ? '증거 비교' : '증거 상세'}>
+          {compareMode ? (
+            picks.length === 0 ? (
+              <p className={styles.empty}>왼쪽에서 비교할 증거를 2개까지 고르세요.</p>
+            ) : (
+              <div className={styles.compare}>
+                {picks.map((id) => {
+                  const d = cache[id]
+                  return d ? (
+                    <article key={id} className={`${styles.paper} ${styles.paperCompact}`}>
+                      <span className={styles.stamp}>{d.id}</span>
+                      <h2 className="serif">{d.title}</h2>
+                      <EvidenceChips detail={d} />
+                      <EvidencePhotoFigure sessionId={session?.sessionId} id={d.id} />
+                      {(d.documents ?? []).length > 1 ? (
+                        d.documents!.map((doc) => (
+                          <section key={doc.id} className={styles.docBlock}>
+                            <h3>{doc.label} · {doc.title}</h3>
+                            <p className={styles.body}>{doc.body}</p>
+                          </section>
+                        ))
+                      ) : (
+                        <p className={styles.body}>{d.documents?.[0]?.body ?? d.body ?? '증거 원문은 아직 서버에서 제공되지 않았습니다.'}</p>
+                      )}
+                    </article>
+                  ) : (
+                    <p key={id} className={styles.empty}>불러오는 중…</p>
+                  )
+                })}
+              </div>
+            )
+          ) : !detail ? (
             <div className={styles.cover}>
               <span className={styles.coverTab}>CASE 001</span>
               <h2 className="serif">사건 기록철</h2>
@@ -131,19 +217,8 @@ export default function Evidence() {
                       </div>
                     )}
                     <h2 className="serif">{cur ? cur.title : detail.title}</h2>
-                    <p className={styles.chips} aria-label="증거 요약">
-                      <span>{detail.acquiredBy ? ROUTE_LABEL[detail.acquiredBy] : '서버 기록 미제공'}</span>
-                      <span>보유 · {npcName(detail.holderId)}</span>
-                    </p>
-                    {(() => {
-                      const ph = evidencePhoto(session?.sessionId, detail.id)
-                      return ph ? (
-                        <figure className={styles.prop}>
-                          <img src={ph.src} alt="" draggable={false} onError={(e) => { (e.currentTarget.parentElement as HTMLElement).style.display = 'none' }} />
-                          <figcaption>{ph.caption}</figcaption>
-                        </figure>
-                      ) : null
-                    })()}
+                    <EvidenceChips detail={detail} />
+                    <EvidencePhotoFigure key={detail.id} sessionId={session?.sessionId} id={detail.id} />
                     <p className={styles.body}>{(cur ? cur.body : detail.body) ?? "증거 원문은 아직 서버에서 제공되지 않았습니다."}</p>
                   </>
                 )
@@ -158,7 +233,7 @@ export default function Evidence() {
                     </button>
                   </dd>
                 </div>
-                <div><dt>획득 경로</dt><dd>{detail.acquiredBy ? ROUTE_LABEL[detail.acquiredBy] : '서버 기록 미제공'}</dd></div>
+                <div><dt>획득 경로</dt><dd>{routeLabel(detail)}</dd></div>
                 <div>
                   <dt>확인된 관계</dt>
                   <dd>

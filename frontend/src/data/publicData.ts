@@ -39,3 +39,12 @@ export const CASE_INTRO = {
 
 /** 증거 칸 수와 번호만 공개한다. 내용은 획득 후 서버가 내려준다. */
 export const EVIDENCE_SLOTS = ['E01', 'E02', 'E03', 'E04', 'E05', 'E06', 'E07', 'E08', 'E09', 'E10']
+
+/**
+ * 증거함 칸 번호. 서버가 알려준 전체 증거 수(totalCount)만큼 E01부터 만든다.
+ * 기존판은 10칸, 확장판은 30칸. 값이 없거나 이상하면 기본 10칸을 쓴다.
+ */
+export function evidenceSlots(total?: number): string[] {
+  if (!Number.isInteger(total) || !total || total < 1 || total > 99) return EVIDENCE_SLOTS
+  return Array.from({ length: total }, (_, i) => `E${String(i + 1).padStart(2, '0')}`)
+}

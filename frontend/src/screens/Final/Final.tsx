@@ -8,7 +8,7 @@ import {
 
 import { cardPath, defaultScene } from '../../data/endingScenes'
 import { endingKeyOf, recordEnding, saveEndingScene } from '../../data/endings'
-import { EVIDENCE_SLOTS } from '../../data/publicData'
+import { evidenceSlots } from '../../data/publicData'
 import CharacterPortrait from '../../components/CharacterPortrait'
 import VisualNovelDialogue from '../../components/VisualNovelDialogue'
 import { npcName } from '../../data/characters'
@@ -122,7 +122,7 @@ function buildEndingScenes(
   const firstEvidence = evidenceNames.slice(0, 3)
   const remainingEvidence = evidenceNames.slice(3)
 
-  if (final.gaveUp && response.result === 'NOT_ENOUGH_EVIDENCE') {
+  if (response.result === 'NOT_ENOUGH_EVIDENCE') {
     return [{ chapter: 'FINAL · 수사 종료', title: '남겨진 단서', lines: defaultScene('NO_EVIDENCE', suspectId).map(line => line.text) }]
   }
   const scenes: EndingScene[] = [
@@ -525,7 +525,7 @@ export default function Final() {
 
         <img style={{width: '100%', maxHeight: '42vh', objectFit: 'contain'}} src={import.meta.env.BASE_URL + cardPath(endingKeyOf(response))} alt={ending.title} />
         <h1 className="serif">{ending.title}</h1>
-        <section><h2>놓친 단서</h2><p>{EVIDENCE_SLOTS.filter(id => !session?.foundEvidence.includes(id)).join(' · ') || '모든 단서를 확보했습니다.'}</p></section>
+        <section><h2>놓친 단서</h2><p>{evidenceSlots(session?.evidenceTotal).filter(id => !session?.foundEvidence.includes(id)).join(' · ') || '모든 단서를 확보했습니다.'}</p></section>
 
         <p className={styles.verdict}>
           판정 · {RESULT_LABEL[response.result]}

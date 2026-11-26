@@ -8,9 +8,11 @@ import type {
   EvidenceDetail,
   EndingDetails,
   Message,
+  ReconstructionSelections,
   RelationGraph,
   SessionState,
 } from './types'
+import { endingToResponse } from './types'
 
 // ============================================================
 // Backend Response Types
@@ -35,6 +37,7 @@ interface BackendGameState {
   attemptsLeft: number
   outcome: string | null
   revision: number
+  currentChapter?: string
   events: BackendEvent[]
 }
 
@@ -216,6 +219,7 @@ function gamePath(sessionId: string): string {
 function toSessionState(
   game: BackendGameState,
   evidenceIds: string[],
+  evidenceTotal?: number,
 ): SessionState {
   return {
     sessionId: game.sessionId,
@@ -228,6 +232,8 @@ function toSessionState(
     activeCharacterId: game.activeCharacterId,
     outcome: game.outcome,
     revision: game.revision,
+    evidenceTotal,
+    currentChapter: game.currentChapter,
   }
 }
 
@@ -330,8 +336,18 @@ export const httpApi: GameApi = {
       { method: 'POST' },
     )
 
+    // 증거함 칸 수(기존판 10, 확장판 30)를 알기 위해 전체 증거 수만 함께 받습니다.
+    // 실패해도 게임 생성은 그대로 진행하고, 다음 상태 조회 때 다시 채워집니다.
+    let evidenceTotal: number | undefined
+    try {
+      const evidence = await request<BackendEvidenceList>(`${gamePath(game.sessionId)}/evidence`)
+      evidenceTotal = evidence.totalCount
+    } catch {
+      evidenceTotal = undefined
+    }
+
     return {
-      state: toSessionState(game, []),
+      state: toSessionState(game, [], evidenceTotal),
       notes: [],
     }
   },
@@ -353,6 +369,7 @@ export const httpApi: GameApi = {
     return toSessionState(
       game,
       evidence.items.map((item) => item.evidenceId),
+      evidence.totalCount,
     )
   },
 
@@ -542,16 +559,7 @@ export const httpApi: GameApi = {
           `${path}/ending`,
         )
 
-        result.ending = {
-          title: ending.title,
-          text: ending.message,
-        }
-
-        result.endingKind = ending.deepEligible
-          ? 'DEEP'
-          : 'NORMAL'
-        result.truth = ending.truth
-        result.scene = ending.scene
+        return endingToResponse(ending, response.attemptsLeft)
       } catch {
         // 지목 결과는 이미 저장되었으므로 재지목하지 않습니다.
         // 엔딩 상세 조회는 별도 요청으로 재시도해야 합니다.
@@ -559,5 +567,25 @@ export const httpApi: GameApi = {
     }
 
     return result
+  },
+
+  // 수사 포기 (확장판 서버 전용). 증거가 부족할 때만 서버가 받아 주고 '증거 부족' 엔딩으로 끝난다.
+  giveUp: async (sessionId: string): Promise<AccuseResponse> => {
+    const path = gamePath(sessionId)
+    const game = await request<BackendGameState>(path)
+    await request(`${path}/give-up`, post({ expectedRevision: game.revision }))
+    const ending = await request<EndingDetails>(`${path}/ending`)
+    return endingToResponse(ending, game.attemptsLeft)
+  },
+
+  // 사건 재구성 (확장판 서버 전용). 정답 여부는 서버만 판정하고 accepted로만 알려 준다.
+  reconstruct: async (sessionId: string, selections: ReconstructionSelections): Promise<boolean> => {
+    const path = gamePath(sessionId)
+    const game = await request<BackendGameState>(path)
+    const res = await request<{ accepted: boolean }>(
+      `${path}/reconstruction`,
+      post({ expectedRevision: game.revision, selections }),
+    )
+    return res.accepted
   },
 }

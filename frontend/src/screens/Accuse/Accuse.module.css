@@ -37,3 +37,13 @@ section h2 small { color: var(--paper-400); }
 .dockText b { color: var(--paper-100); font-weight: 500; }
 .dockText small { color: var(--paper-400); }
 @media (max-width: 900px) { .people { grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); } }
+
+/* 사건 재구성 */
+.recon p { font-size: 14px; color: var(--paper-300); margin: 0 0 12px; }
+.reconRow { display: grid; grid-template-columns: 72px 1fr; gap: 10px; align-items: start; padding: 8px 0; border-top: 1px solid var(--ink-700); }
+.reconLabel { font-family: var(--font-serif); font-size: 15px; color: var(--paper-100); }
+.reconLabel small { display: block; font-size: 11px; color: var(--paper-400); }
+.reconChips { display: flex; flex-wrap: wrap; gap: 6px; }
+.reconChips button { padding: 4px 10px; font-size: 13px; color: var(--paper-200); background: transparent; border: 1px solid var(--ash-500); cursor: pointer; }
+.reconChips button:disabled { opacity: .5; cursor: default; }
+.reconChips .chipOn { color: var(--ink-950); background: var(--brass-400); border-color: var(--brass-400); }

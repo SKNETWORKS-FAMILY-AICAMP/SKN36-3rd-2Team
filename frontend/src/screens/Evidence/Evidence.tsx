@@ -29,6 +29,13 @@ function EvidenceChips({ detail }: { detail: EvidenceDetail }) {
   )
 }
 
+/** 목록 칸 썸네일. 사진을 못 불러오면(서버에 사진 없음 등) 문서 아이콘으로 바꾼다 */
+function EvidenceThumb({ src }: { src: string }) {
+  const [failed, setFailed] = useState(false)
+  if (failed) return <FileText size={28} />
+  return <img className={styles.thumb} src={src} alt="" loading="lazy" draggable={false} onError={() => setFailed(true)} />
+}
+
 /** 증거 사진 (상세·비교 공용). 이미지가 없거나 못 불러오면 숨긴다 */
 function EvidencePhotoFigure({ sessionId, id }: { sessionId?: string; id: string }) {
   const ph = evidencePhoto(sessionId, id)
@@ -138,7 +145,7 @@ export default function Evidence() {
                     <span className={styles.no}>{id}</span>
                     {compareMode && picks.includes(id) && <i className={styles.pickNo}>{picks.indexOf(id) + 1}</i>}
                     {has && d && evidencePhoto(session?.sessionId, id) ? (
-                      <img className={styles.thumb} src={evidencePhoto(session?.sessionId, id)!.thumb} alt="" loading="lazy" draggable={false} />
+                      <EvidenceThumb key={id} src={evidencePhoto(session?.sessionId, id)!.thumb} />
                     ) : has ? <FileText size={28} /> : <Lock size={24} />}
                     <span className={styles.name}>{has ? (d?.title ?? '불러오는 중…') : '잠김 · 인물과 대화해 단서 찾기'}</span>
                   </button>

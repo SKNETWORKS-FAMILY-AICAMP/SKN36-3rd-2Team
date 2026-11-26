@@ -1,0 +1,32 @@
+.guide {
+  position: fixed;
+  bottom: 18px;
+  right: 18px;
+  width: min(310px, calc(100vw - 36px));
+  z-index: 90;
+  padding: 15px;
+  background: #211d19;
+  border: 1px solid #c6a473;
+  border-radius: 7px;
+  box-shadow: 0 8px 30px #0009;
+  color: #e8d8bf;
+}
+.guide small { color: #c6a473; }
+.guide h3 { margin: 6px 0; font-size: 16px; }
+.guide p { margin: 6px 0 12px; font-size: 13px; line-height: 1.6; }
+.guide button { width: 100%; }
+.highlight {
+  outline: 3px solid #e9c47e !important;
+  outline-offset: 3px;
+  animation: fieldPulse 1.5s ease-in-out infinite;
+}
+@keyframes fieldPulse {
+  0%, 100% { box-shadow: 0 0 4px #d9a85a; }
+  50% { box-shadow: 0 0 18px #e9c47e; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .highlight { animation: none; }
+}
+
+.highlight:disabled { opacity: .85 !important; }
+.guide { box-sizing: border-box; }

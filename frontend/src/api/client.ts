@@ -6,6 +6,7 @@ import { httpApi } from './httpApi'
 
 export interface GameApi {
   createSession(): Promise<CreateSessionResponse>
+  completePrologue(sessionId: string): Promise<void>
   getState(sessionId: string): Promise<SessionState>
   getMessages(sessionId: string, npcId: string): Promise<Message[]>
   sendMessage(sessionId: string, npcId: string, text: string): Promise<ChatReply>

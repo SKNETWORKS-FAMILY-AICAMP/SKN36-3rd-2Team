@@ -1,29 +1,17 @@
-
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 
 import TopNav from '../../components/TopNav'
 import PosterScene from '../../components/PosterScene'
 import PlaceScene from '../../components/PlaceScene'
-import GameHelp from '../../components/GameHelp'
 import VisualNovelDialogue from '../../components/VisualNovelDialogue'
-
+import { api } from '../../api/client'
 import { useGameStore } from '../../store/gameStore'
-import { CASE_INTRO } from '../../data/publicData'
 import styles from './Story.module.css'
 
-// ============================================================
-// Issue #59 — Cinematic Prologue + Tutorial
-// ============================================================
-
+// Issue #203 — 기존 프롤로그 연출 유지, 조사 화면 분리
 const STORY_KEY = 'serin-story-beat-v2'
-const HELP_SEEN_KEY = 'serin-help-seen-session-v2'
-const SEEN_PLACES_KEY = 'serin-seen-places'
-
-// ============================================================
-// 프롤로그 스토리
-// ============================================================
 
 const OPENING = [
   {
@@ -113,41 +101,6 @@ const OPENING = [
   },
 ] as const
 
-// ============================================================
-// 현장 탐색 데이터
-// ============================================================
-
-const PLACES = [
-  {
-    key: 'lobby',
-    name: '1층 로비',
-    text:
-      '불이 꺼진 로비. 동창회를 위해 마련된 접수 자리가 그대로 남아 있다.',
-  },
-  {
-    key: 'stairs',
-    name: '내부 계단',
-    text:
-      '신기범이 발견된 계단 아래에는 통제선이 둘러져 있다. 추락인지 타살인지는 초기 관찰만으로 확정되지 않았다.',
-  },
-  {
-    key: 'records',
-    name: '2층 기록실 입구',
-    text: CASE_INTRO.notes[0].text,
-  },
-  {
-    key: 'office',
-    name: '신기범 사무실',
-    text: CASE_INTRO.notes[1].text,
-  },
-] as const
-
-type Place = (typeof PLACES)[number]
-
-// ============================================================
-// 브라우저 저장 상태
-// ============================================================
-
 function loadStoryBeat(): number {
   try {
     const raw = localStorage.getItem(STORY_KEY) ?? '0'
@@ -172,269 +125,101 @@ function saveStoryBeat(beat: number): void {
   }
 }
 
-function loadSeenPlaces(): string[] {
-  try {
-    const raw: unknown = JSON.parse(
-      localStorage.getItem(SEEN_PLACES_KEY) ?? '[]',
-    )
-
-    if (!Array.isArray(raw)) return []
-
-    const allowed = new Set<string>(
-      PLACES.map((place) => place.key),
-    )
-
-    return [
-      ...new Set(
-        raw.filter(
-          (key): key is string =>
-            typeof key === 'string' && allowed.has(key),
-        ),
-      ),
-    ]
-  } catch {
-    return []
-  }
-}
-
-function saveSeenPlaces(places: string[]): void {
-  try {
-    localStorage.setItem(
-      SEEN_PLACES_KEY,
-      JSON.stringify(places),
-    )
-  } catch {
-    // 저장소 오류가 발생해도 현장 탐색은 유지합니다.
-  }
-}
-
-function hasSeenHelp(sessionId: string): boolean {
-  try {
-    return localStorage.getItem(HELP_SEEN_KEY) === sessionId
-  } catch {
-    return false
-  }
-}
-
-function saveHelpSeen(sessionId: string): void {
-  try {
-    localStorage.setItem(HELP_SEEN_KEY, sessionId)
-  } catch {
-    // 저장소 오류가 발생해도 NPC 대화로 이동합니다.
-  }
-}
-
-// ============================================================
-// Story Component
-// ============================================================
-
 export default function Story() {
   const navigate = useNavigate()
-
-  // ==========================================================
-  // 서버 게임 상태
-  // ==========================================================
-
   const session = useGameStore((state) => state.session)
   const ensure = useGameStore((state) => state.ensureSession)
-
-  const sessionId = session?.sessionId ?? null
-  const first = session?.unlockedNpcs[0] ?? 'C01'
-
-  // ==========================================================
-  // 프롤로그 상태
-  // ==========================================================
-
+  const refresh = useGameStore((state) => state.refresh)
   const [beat, setBeat] = useState(loadStoryBeat)
-
-  // ==========================================================
-  // 서버 세션 상태
-  // ==========================================================
-
   const [sessionReady, setSessionReady] = useState(false)
-  const [sessionError, setSessionError] = useState<string | null>(
-    null,
-  )
-
-  // ==========================================================
-  // 현장 탐색 상태
-  // ==========================================================
-
-  const [place, setPlace] = useState<Place | null>(null)
-  const [seen, setSeen] = useState<string[]>(loadSeenPlaces)
-
-  // ==========================================================
-  // UI 상태
-  // ==========================================================
-
+  const [sessionError, setSessionError] = useState<string | null>(null)
   const [photoMissing, setPhotoMissing] = useState(false)
-
-  // Issue #59: NPC 대화 전 도움말
-  const [helpOpen, setHelpOpen] = useState(false)
-
-  // ==========================================================
-  // 서버 세션 확인
-  // ==========================================================
+  const [completing, setCompleting] = useState(false)
+  const [completeError, setCompleteError] = useState<string | null>(null)
+  const completingRef = useRef(false)
 
   useEffect(() => {
     let active = true
-
     void ensure()
       .then(() => {
         if (!active) return
+        const current = useGameStore.getState().session
+        if (!current) throw new Error('게임 세션을 불러오지 못했습니다.')
 
-        const currentSession = useGameStore.getState().session
-
-        if (!currentSession) {
-          throw new Error('게임 세션을 불러오지 못했습니다.')
+        // 이미 프롤로그를 완료한 서버 세션은 다시 완료하지 않습니다.
+        if (current.phase === 'INVESTIGATION') {
+          saveStoryBeat(OPENING.length)
+          navigate('/play', { replace: true })
+          return
+        }
+        if (current.phase === 'FINISHED') {
+          navigate('/final', { replace: true })
+          return
+        }
+        if (current.phase === 'ACCUSATION') {
+          navigate('/accuse', { replace: true })
+          return
         }
 
-        // 새 세션이면 저장된 진행 상태가 초기화되어 있습니다.
         setBeat(loadStoryBeat())
-        setSeen(loadSeenPlaces())
-        setPlace(null)
-
         setSessionError(null)
         setSessionReady(true)
       })
       .catch((error: unknown) => {
         if (!active) return
-
         setSessionReady(false)
-
-        setSessionError(
-          error instanceof Error
-            ? error.message
-            : '서버 연결에 실패했습니다.',
-        )
+        setSessionError(error instanceof Error ? error.message : '서버 연결에 실패했습니다.')
       })
+    return () => { active = false }
+  }, [ensure, navigate])
 
-    return () => {
-      active = false
+  // 마지막 장면과 건너뛰기 모두 동일한 서버 완료 절차를 사용합니다.
+  const finishPrologue = async () => {
+    if (!sessionReady || !session || completingRef.current) return
+    completingRef.current = true
+    setCompleting(true)
+    setCompleteError(null)
+    try {
+      await api.completePrologue(session.sessionId)
+      await refresh()
+      const current = useGameStore.getState().session
+      if (current?.sessionId !== session.sessionId || current.phase !== 'INVESTIGATION') {
+        throw new Error('조사 단계 전환을 확인하지 못했습니다.')
+      }
+      saveStoryBeat(OPENING.length)
+      navigate('/play', { replace: true })
+    } catch (error: unknown) {
+      setCompleteError(error instanceof Error ? error.message : '조사 시작에 실패했습니다.')
+    } finally {
+      completingRef.current = false
+      setCompleting(false)
     }
-  }, [ensure])
-
-  // ==========================================================
-  // 프롤로그 장면
-  // ==========================================================
-
-  const intro = beat < OPENING.length
-
-  const openingScene = intro
-    ? OPENING[beat].scene
-    : null
-
-  const backgroundScene = intro
-    ? openingScene
-    : place?.key ?? null
-
-  // ==========================================================
-  // 다음 스토리 장면
-  // ==========================================================
+  }
 
   const next = () => {
-    const nextBeat = Math.min(
-      beat + 1,
-      OPENING.length,
-    )
-
+    if (completingRef.current) return
+    if (beat >= OPENING.length - 1) {
+      void finishPrologue()
+      return
+    }
+    const nextBeat = beat + 1
     setBeat(nextBeat)
     saveStoryBeat(nextBeat)
   }
 
-  // ==========================================================
-  // 프롤로그 건너뛰기
-  // ==========================================================
-
-  const skipIntro = () => {
-    setBeat(OPENING.length)
-    saveStoryBeat(OPENING.length)
-  }
-
-  // ==========================================================
-  // 현장 방문
-  // ==========================================================
-
-  const visit = (selectedPlace: Place) => {
-    setPlace(selectedPlace)
-
-    setSeen((current) => {
-      if (current.includes(selectedPlace.key)) {
-        return current
-      }
-
-      const updated = [
-        ...current,
-        selectedPlace.key,
-      ]
-
-      saveSeenPlaces(updated)
-
-      return updated
-    })
-  }
-
-  // ==========================================================
-  // Issue #59: 인물 대화 시작 전 도움말 확인
-  // ==========================================================
-
-  const startDialogue = () => {
-    if (!sessionReady || !sessionId) return
-
-    // 이번 세션에서 이미 도움말을 확인했다면 바로 이동합니다.
-    if (hasSeenHelp(sessionId)) {
-      navigate(`/chat/${first}`)
-      return
-    }
-
-    // 처음 시작하는 세션이면 도움말을 표시합니다.
-    setHelpOpen(true)
-  }
-
-  // ==========================================================
-  // 도움말 확인 및 NPC 대화 시작
-  // ==========================================================
-
-  const completeTutorial = () => {
-    if (!sessionId) {
-      setHelpOpen(false)
-      return
-    }
-
-    // 실제로 도움말을 닫는 시점에 확인 완료 처리
-    saveHelpSeen(sessionId)
-
-    setHelpOpen(false)
-
-    // 첫 NPC 대화 화면으로 이동
-    navigate(`/chat/${first}`)
-  }
-
-  // ==========================================================
-  // 서버 세션 로딩 화면
-  // ==========================================================
+  const skipIntro = () => { void finishPrologue() }
+  const intro = beat < OPENING.length
+  const backgroundScene = intro ? OPENING[beat].scene : null
 
   if (!sessionReady) {
     return (
       <div className={styles.page}>
         <TopNav />
-
         <main className={styles.main}>
-          <section
-            className={styles.box}
-            role={sessionError ? 'alert' : 'status'}
-          >
-            <p className={styles.line}>
-              {sessionError ??
-                '사건 기록을 불러오는 중입니다.'}
-            </p>
-
+          <section className={styles.box} role={sessionError ? 'alert' : 'status'}>
+            <p className={styles.line}>{sessionError ?? '사건 기록을 불러오는 중입니다.'}</p>
             {sessionError && (
-              <button
-                type="button"
-                className={styles.go}
-                onClick={() => navigate('/')}
-              >
+              <button type="button" className={styles.go} onClick={() => navigate('/')}>
                 메인 화면으로
               </button>
             )}
@@ -444,16 +229,8 @@ export default function Story() {
     )
   }
 
-  // ==========================================================
-  // 화면 렌더링
-  // ==========================================================
-
   return (
     <div className={styles.page}>
-      {/* ======================================================
-          배경 화면
-          ====================================================== */}
-
       <AnimatePresence mode="sync">
         <motion.div
           key={backgroundScene ?? 'outside'}
@@ -513,35 +290,19 @@ export default function Story() {
           )}
       </AnimatePresence>
 
-      {/* ======================================================
-          메인 콘텐츠
-          ====================================================== */}
-
       <main className={styles.main}>
         <AnimatePresence mode="wait">
-          {intro ? (
-            // ==================================================
-            // 프롤로그
-            // ==================================================
-
-            <motion.section
-              key={`story-${beat}`}
-              className={styles.box}
-              initial={{
-                opacity: 0,
-                y: 16,
-              }}
-              animate={{
-                opacity: 1,
-                y: 0,
-              }}
-              exit={{
-                opacity: 0,
-                y: -8,
-              }}
-              transition={{ duration: 0.45 }}
-              aria-label="사건 프롤로그"
-            >
+          <motion.section
+            key={intro ? `story-${beat}` : 'complete'}
+            className={styles.box}
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.45 }}
+            aria-label="사건 프롤로그"
+            aria-busy={completing}
+          >
+            {intro ? (
               <VisualNovelDialogue
                 key={`opening-novel-${beat}`}
                 chapter={OPENING[beat].chapter}
@@ -549,106 +310,25 @@ export default function Story() {
                 progress={`${String(beat + 1).padStart(2, '0')} / ${String(OPENING.length).padStart(2, '0')}`}
                 onNext={next}
                 onSkip={skipIntro}
-                nextLabel={
-                  beat === OPENING.length - 1
-                    ? '현장 조사 시작'
-                    : '다음 장면'
-                }
+                nextLabel={beat === OPENING.length - 1 ? '현장 조사 시작' : '다음 장면'}
               />
-            </motion.section>
-          ) : (
-            // ==================================================
-            // 현장 탐색
-            // ==================================================
-
-            <motion.section
-              key="choose"
-              className={styles.box}
-              initial={{
-                opacity: 0,
-                y: 12,
-              }}
-              animate={{
-                opacity: 1,
-                y: 0,
-              }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.4 }}
-            >
-              <p className={styles.place}>
-                어디를 살펴볼까?
-
-                <span className={styles.count}>
-                  살펴본 곳 {seen.length} / {PLACES.length}
-                </span>
-              </p>
-
-              <div className={styles.places}>
-                {PLACES.map((item) => (
-                  <button
-                    key={item.key}
-                    type="button"
-                    className={[
-                      styles.pl,
-                      place?.key === item.key
-                        ? styles.cur
-                        : '',
-                    ].join(' ')}
-                    onClick={() => visit(item)}
-                  >
-                    {item.name}
-
-                    {seen.includes(item.key) ? (
-                      <small> ✓</small>
-                    ) : (
-                      <i
-                        className={styles.new}
-                        aria-label="아직 살펴보지 않음"
-                      />
-                    )}
-                  </button>
-                ))}
-              </div>
-
-              <p
-                className={styles.obs}
-                aria-live="polite"
-              >
-                {place
-                  ? place.text
-                  : '장소를 선택하면 관찰한 내용이 표시됩니다.'}
-              </p>
-
-              <div className={styles.actions}>
-                {seen.length < PLACES.length && (
-                  <span className={styles.left}>
-                    아직 살펴보지 않은 곳이{' '}
-                    {PLACES.length - seen.length}곳 남아 있습니다.
-                  </span>
-                )}
-
-                <button
-                  type="button"
-                  className={styles.go}
-                  disabled={!sessionId}
-                  onClick={startDialogue}
-                >
-                  관계자에게 이야기를 듣는다
+            ) : (
+              <button type="button" className={styles.go} disabled={completing} onClick={skipIntro}>
+                현장 조사 시작
+              </button>
+            )}
+            {completing && <p className={styles.line} role="status">조사 단계로 전환하는 중입니다.</p>}
+            {completeError && (
+              <div role="alert">
+                <p className={styles.line}>{completeError}</p>
+                <button type="button" className={styles.go} disabled={completing} onClick={skipIntro}>
+                  다시 시도
                 </button>
               </div>
-            </motion.section>
-          )}
+            )}
+          </motion.section>
         </AnimatePresence>
       </main>
-
-      {/* ======================================================
-          Issue #59 — 최초 NPC 대화 전 도움말
-          ====================================================== */}
-
-      <GameHelp
-        open={helpOpen}
-        onClose={completeTutorial}
-      />
     </div>
   )
 }

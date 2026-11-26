@@ -212,6 +212,11 @@ function gamePath(sessionId: string): string {
   return `/games/${encodeURIComponent(sessionId)}`
 }
 
+/** 서버 증거 사진 주소. 획득한 증거만 서버가 내려주고(아니면 404), 세션 쿠키로 확인한다 */
+export function evidencePhotoUrl(sessionId: string, evidenceId: string, thumbnail = false): string {
+  return `${BASE}${gamePath(sessionId)}/evidence/${encodeURIComponent(evidenceId)}/photo${thumbnail ? '?thumbnail=true' : ''}`
+}
+
 // ============================================================
 // Response Adapters
 // ============================================================

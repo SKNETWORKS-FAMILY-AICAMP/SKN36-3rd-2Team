@@ -955,3 +955,748 @@ def test_legacy_runtime_has_no_emotional_prompt(environment):
     messages = generate.call_args.args[0]
 
     assert "[NPC EMOTIONAL STATE]" not in messages[0]["content"]
+
+# ============================================================
+# Issue #174 - evidence dialogue runtime
+# ============================================================
+
+def make_evidence_174_state():
+    from crimescene.scenario.schemas.game_state import EvidenceState
+
+    state = make_state().model_copy(
+        update={
+            "content_version": "case001_1120",
+            "evidence": {
+                "E01": EvidenceState(stage="found"),
+            },
+        }
+    )
+
+    return state
+
+
+def test_evidence_174_first_and_repeat(
+    environment,
+    monkeypatch,
+):
+    from crimescene.chat.npc_rag_service import NPCRAGResources
+    from crimescene.scenario.policy_evaluator import PolicyEvaluator
+    from crimescene.scenario.schemas.evidence import EvidenceRule
+    import crimescene.trigger.case001_dialogue as dialogue
+
+    _, _, prepare_mock = environment
+    state = make_evidence_174_state()
+
+    store = NPCSessionStore()
+    store.select_npc(state, "C01")
+
+    resources = NPCRAGResources(
+        personas={},
+        qdrant_client=None,
+        neo4j_driver=None,
+        embedder=None,
+        encoder=None,
+        trusted_records=(),
+        documents=(),
+        npc_cards=(),
+        registry=(),
+        trusted_edges=(),
+        evidence_rules={
+            "E01": EvidenceRule(
+                name="테스트 자료",
+                score=1,
+                holder="C01",
+                prerequisites=[],
+                presentation=[],
+                q=[],
+            )
+        },
+        evaluator=PolicyEvaluator({}),
+        content_version="case001_1120",
+    )
+
+    # Isolate approved recipient configuration for this test.
+    monkeypatch.setattr(
+        dialogue,
+        "build_case001_recipients",
+        lambda **kwargs: {
+            "E01": frozenset({"C01"}),
+        },
+    )
+
+    generate = MagicMock(
+        return_value=valid_llm_output()
+    )
+
+    def run_with_mock_llm(*args, **kwargs):
+        return module.run_npc_chat(
+            *args,
+            **kwargs,
+            generate=generate,
+        )
+
+    monkeypatch.setattr(
+        dialogue,
+        "run_npc_chat",
+        run_with_mock_llm,
+    )
+
+    first = dialogue.run_case001_npc_dialogue(
+        QUESTION,
+        state=state,
+        session_store=store,
+        resources=resources,
+        policies={},
+        trigger_rules=(),
+        presented_evidence_id="E01",
+    )
+
+    assert first.presentation_created is True
+    assert first.state.presented == {"C01": ["E01"]}
+    assert first.turn.reply.grounded
+
+    assert "[NPC EVIDENCE DIALOGUE]" in (
+        generate.call_args.args[0][0]["content"]
+    )
+    assert "최초 제시" in (
+        generate.call_args.args[0][0]["content"]
+    )
+
+    prepare_mock.return_value = replace(
+        prepare_mock.return_value,
+        history=store.get_history(first.state, "C01"),
+    )
+
+    second = dialogue.run_case001_npc_dialogue(
+        QUESTION,
+        state=first.state,
+        session_store=store,
+        resources=resources,
+        policies={},
+        trigger_rules=(),
+        presented_evidence_id="E01",
+    )
+
+    assert second.presentation_created is False
+    assert second.turn.reply.grounded
+    assert second.state.presented == {"C01": ["E01"]}
+    assert second.state.revision == first.state.revision
+    assert second.state.score == first.state.score
+
+    assert second.turn.display_text.startswith(
+        "앞서 보여주신 자료군요."
+    )
+
+    assert second.turn.exchange.display_text == (
+        second.turn.display_text
+    )
+
+    assert "동일 증거 재제시" in (
+        generate.call_args.args[0][0]["content"]
+    )
+
+    # Repeat presentation must not reuse the normal chat cache.
+    assert generate.call_count == 2
+
+    assert not prepare_mock.call_args.kwargs.get(
+        "use_memory_context", False
+    )
+
+    assert len(store.get_history(second.state, "C01")) == 2
+
+
+def prepare_evidence_174_runtime(environment, *, repeated=False):
+    from crimescene.chat.npc_evidence_dialogue import (
+        EvidenceDialogueContext,
+    )
+
+    _, _, prepare_mock = environment
+
+    state = make_evidence_174_state().model_copy(
+        update={
+            "revision": 1,
+            "presented": {"C01": ["E01"]},
+        }
+    )
+
+    store = NPCSessionStore()
+    store.select_npc(state, "C01")
+
+    evidence = EvidenceDialogueContext(
+        session_id=state.session_id,
+        character_id="C01",
+        evidence_id="E01",
+        revision=state.revision,
+        first_presentation=not repeated,
+    )
+
+    return state, store, prepare_mock, evidence
+
+
+def test_evidence_174_repeat_skips_social_bypass(environment):
+    state, store, prepare_mock, evidence = (
+        prepare_evidence_174_runtime(
+            environment,
+            repeated=True,
+        )
+    )
+
+    generate = MagicMock(
+        return_value=valid_llm_output()
+    )
+
+    turn = module.run_npc_chat(
+        "안녕하세요.",
+        state=state,
+        session_store=store,
+        resources=None,
+        generate=generate,
+        evidence_dialogue=evidence,
+    )
+
+    assert turn.reply.grounded
+    assert "앞서 보여주신 자료군요." in turn.display_text
+
+    prepare_mock.assert_called_once()
+    generate.assert_called_once()
+
+
+def test_evidence_174_repeat_skips_recall_bypass(environment):
+    state, store, prepare_mock, evidence = (
+        prepare_evidence_174_runtime(
+            environment,
+            repeated=True,
+        )
+    )
+
+    generate = MagicMock(
+        return_value='{"quotes": []}'
+    )
+
+    turn = module.run_npc_chat(
+        MEMORY_RECALL_QUESTION,
+        state=state,
+        session_store=store,
+        resources=None,
+        generate=generate,
+        evidence_dialogue=evidence,
+    )
+
+    assert turn.reply.text == FALLBACK_REPLY
+
+    prepare_mock.assert_called_once()
+    generate.assert_called_once()
+
+
+def test_evidence_174_combines_previous_emotion(environment):
+    state, store, prepare_mock, evidence = (
+        prepare_evidence_174_runtime(
+            environment,
+            repeated=True,
+        )
+    )
+
+    for _ in range(4):
+        store.append_verified_exchange(
+            state,
+            "C01",
+            user_message=EMOTION_PRESSURE,
+            reply=module.NPCGroundedReply(
+                text=FALLBACK_REPLY,
+                source_ids=(),
+                grounded=False,
+            ),
+        )
+
+    prepare_mock.return_value = replace(
+        prepare_mock.return_value,
+        history=store.get_history(state, "C01"),
+    )
+
+    generate = MagicMock(
+        return_value=valid_llm_output()
+    )
+
+    turn = module.run_npc_chat(
+        QUESTION,
+        state=state,
+        session_store=store,
+        resources=None,
+        generate=generate,
+        evidence_dialogue=evidence,
+    )
+
+    assert turn.reply.grounded
+
+    assert turn.display_text.startswith(
+        "앞서 제시하신 자료군요. "
+        "잠시만요. 핵심만 말씀드리겠습니다."
+    )
+
+    assert turn.exchange.display_text == turn.display_text
+
+    prompt = generate.call_args.args[0][0]["content"]
+
+    assert "[NPC EVIDENCE DIALOGUE]" in prompt
+    assert "[NPC EMOTIONAL STATE]" in prompt
+
+
+def test_evidence_174_blocked_plan_stays_blocked(environment):
+    state, store, prepare_mock, evidence = (
+        prepare_evidence_174_runtime(
+            environment,
+            repeated=True,
+        )
+    )
+
+    prepare_mock.return_value = NPCChatRAGResult(
+        character_id="C01",
+        history=(),
+        reply_plan=make_blocked_plan(),
+    )
+
+    generate = MagicMock()
+
+    turn = module.run_npc_chat(
+        QUESTION,
+        state=state,
+        session_store=store,
+        resources=None,
+        generate=generate,
+        evidence_dialogue=evidence,
+    )
+
+    assert turn.reply.text == FALLBACK_REPLY
+    assert turn.display_text == FALLBACK_REPLY
+    assert turn.reply.source_ids == ()
+
+    generate.assert_not_called()
+
+
+def test_evidence_174_rejects_unapproved_quote(environment):
+    state, store, _, evidence = (
+        prepare_evidence_174_runtime(
+            environment,
+            repeated=True,
+        )
+    )
+
+    generate = MagicMock(
+        return_value=json.dumps({
+            "quotes": [{
+                "source_id": "PRIVATE-SOURCE",
+                "quote": "PRIVATE_SENTINEL_174",
+            }]
+        })
+    )
+
+    turn = module.run_npc_chat(
+        QUESTION,
+        state=state,
+        session_store=store,
+        resources=None,
+        generate=generate,
+        evidence_dialogue=evidence,
+    )
+
+    assert turn.reply.text == FALLBACK_REPLY
+    assert turn.reply.source_ids == ()
+    assert "PRIVATE_SENTINEL_174" not in turn.display_text
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"session_id": "OTHER-SESSION"},
+        {"character_id": "C02"},
+        {"revision": 999},
+        {"evidence_id": "E26"},
+        {"evidence_id": "E30"},
+    ],
+)
+def test_evidence_174_rejects_forged_context(
+    environment,
+    changes,
+):
+    state, store, prepare_mock, evidence = (
+        prepare_evidence_174_runtime(
+            environment,
+            repeated=True,
+        )
+    )
+
+    forged = replace(evidence, **changes)
+    generate = MagicMock()
+
+    with pytest.raises(PermissionError):
+        module.run_npc_chat(
+            QUESTION,
+            state=state,
+            session_store=store,
+            resources=None,
+            generate=generate,
+            evidence_dialogue=forged,
+        )
+
+    prepare_mock.assert_not_called()
+    generate.assert_not_called()
+
+    assert store.get_history(state, "C01") == ()
+
+# ============================================================
+# Issue #174 - canonical/display consistency regression
+# ============================================================
+
+@pytest.mark.parametrize("expanded", [False, True])
+def test_renderer_rejection_clears_grounded_reply(
+    environment,
+    monkeypatch,
+    expanded,
+):
+    state, _, _ = environment
+
+    if expanded:
+        state = state.model_copy(
+            update={"content_version": "case001_1120"}
+        )
+
+    store = NPCSessionStore()
+    store.select_npc(state, "C01")
+
+    renderer = MagicMock(return_value=FALLBACK_REPLY)
+
+    monkeypatch.setattr(
+        module,
+        "render_npc_speech",
+        renderer,
+    )
+
+    generate = MagicMock(
+        return_value=valid_llm_output()
+    )
+
+    before = state.model_dump()
+
+    turn = module.run_npc_chat(
+        QUESTION,
+        state=state,
+        session_store=store,
+        resources=None,
+        generate=generate,
+    )
+
+    renderer.assert_called_once()
+
+    assert turn.reply.grounded is False
+    assert turn.reply.source_ids == ()
+    assert turn.reply.text == FALLBACK_REPLY
+    assert turn.display_text == FALLBACK_REPLY
+
+    assert turn.exchange.npc_message == FALLBACK_REPLY
+    assert turn.exchange.source_ids == ()
+    assert turn.exchange.display_text is None
+
+    history = store.get_history(state, "C01")
+
+    assert len(history) == 1
+    assert history[-1].npc_message == FALLBACK_REPLY
+    assert history[-1].source_ids == ()
+
+    assert state.model_dump() == before
+
+
+def test_multiline_quote_cannot_remain_grounded_when_rejected(
+    environment,
+):
+    state, _, prepare_mock = environment
+
+    state = state.model_copy(
+        update={"content_version": "case001_1120"}
+    )
+
+    store = NPCSessionStore()
+    store.select_npc(state, "C01")
+
+    quote = (
+        "테스트 증거: 확인 기록\n"
+        "  보유자: 테스트 NPC\n"
+        "  상태: 플레이어가 수집한 증거"
+    )
+
+    plan = make_plan()
+    context = plan.authorized_context
+
+    item = replace(
+        context.items[0],
+        content=quote,
+    )
+
+    context = replace(
+        context,
+        items=(item,),
+        text=f"[SOURCE 1]\n{quote}\n[/SOURCE]",
+    )
+
+    system_message, user_message = plan.messages
+
+    payload = json.loads(user_message["content"])
+    payload["verified_context"] = context.text
+
+    plan = replace(
+        plan,
+        authorized_context=context,
+        messages=(
+            system_message,
+            {
+                **user_message,
+                "content": json.dumps(
+                    payload,
+                    ensure_ascii=False,
+                ),
+            },
+        ),
+    )
+
+    prepare_mock.return_value = replace(
+        prepare_mock.return_value,
+        reply_plan=plan,
+    )
+
+    generate = MagicMock(
+        return_value=json.dumps(
+            {
+                "quotes": [{
+                    "source_id": SOURCE_ID,
+                    "quote": quote,
+                }]
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    turn = module.run_npc_chat(
+        QUESTION,
+        state=state,
+        session_store=store,
+        resources=None,
+        generate=generate,
+    )
+
+    assert turn.display_text == FALLBACK_REPLY
+    assert turn.reply.text == FALLBACK_REPLY
+    assert not turn.reply.grounded
+    assert turn.reply.source_ids == ()
+
+    assert turn.exchange.npc_message == FALLBACK_REPLY
+    assert turn.exchange.source_ids == ()
+
+    history = store.get_history(state, "C01")
+
+    assert len(history) == 1
+    assert quote not in history[0].npc_message
+
+# ============================================================
+# Issue #174 - canonical quote format regression
+# ============================================================
+
+def make_quote_format_plan(content, source_id=SOURCE_ID):
+    plan = make_plan()
+    context = plan.authorized_context
+
+    item = replace(
+        context.items[0],
+        source_id=source_id,
+        content=content,
+    )
+
+    context = replace(
+        context,
+        items=(item,),
+        text=f"[SOURCE 1]\n{content}\n[/SOURCE]",
+    )
+
+    system_message, user_message = plan.messages
+
+    payload = json.loads(user_message["content"])
+    payload["verified_context"] = context.text
+
+    return replace(
+        plan,
+        authorized_context=context,
+        source_ids=(source_id,),
+        messages=(
+            system_message,
+            {
+                **user_message,
+                "content": json.dumps(
+                    payload,
+                    ensure_ascii=False,
+                ),
+            },
+        ),
+    )
+
+
+def quote_format_output(quote, source_id=SOURCE_ID):
+    return json.dumps(
+        {
+            "quotes": [{
+                "source_id": source_id,
+                "quote": quote,
+            }]
+        },
+        ensure_ascii=False,
+    )
+
+
+@pytest.mark.parametrize(
+    "separator",
+    [
+        "\n",
+        "\r",
+        "\r\n",
+        "\v",
+        "\f",
+        "\x1c",
+        "\x1d",
+        "\x1e",
+        "\x85",
+        "\u2028",
+        "\u2029",
+    ],
+)
+def test_guard_rejects_multiline_quote_formats(separator):
+    from crimescene.retriever import npc_output_guard as guard
+
+    quote = (
+        "첫 번째 승인 기록입니다."
+        + separator
+        + "두 번째 승인 기록입니다."
+    )
+
+    plan = make_quote_format_plan(quote)
+    context = plan.authorized_context
+
+    output = quote_format_output(quote)
+
+    assert guard._verify_quotes(output, context) == ()
+
+    assert guard._quote_failure_reason(
+        output, context
+    ) == "INVALID_QUOTE_FORMAT"
+
+
+@pytest.mark.parametrize(
+    "quote",
+    [
+        "승인된 기록입니다. (근거: OTHER)",
+        "제가 확인한 자료에는 이렇게 나와 있어요.",
+    ],
+)
+def test_guard_rejects_reserved_quote_markers(quote):
+    from crimescene.retriever import npc_output_guard as guard
+
+    plan = make_quote_format_plan(quote)
+    context = plan.authorized_context
+    output = quote_format_output(quote)
+
+    assert guard._verify_quotes(output, context) == ()
+
+    assert guard._quote_failure_reason(
+        output, context
+    ) == "INVALID_QUOTE_FORMAT"
+
+
+@pytest.mark.parametrize(
+    "source_id",
+    ["", "SOURCE)", "SOURCE\nOTHER", "SOURCE\u2028OTHER"],
+)
+def test_guard_rejects_invalid_source_delimiters(source_id):
+    from crimescene.retriever import npc_output_guard as guard
+
+    plan = make_quote_format_plan(QUOTE, source_id)
+    context = plan.authorized_context
+
+    output = quote_format_output(QUOTE, source_id)
+
+    assert guard._verify_quotes(output, context) == ()
+
+    assert guard._quote_failure_reason(
+        output, context
+    ) == "INVALID_SOURCE_ID"
+
+
+def test_guard_multiline_retry_preserves_valid_single_line(
+    environment,
+):
+    state, _, prepare_mock = environment
+
+    state = state.model_copy(
+        update={"content_version": "case001_1120"}
+    )
+
+    store = NPCSessionStore()
+    store.select_npc(state, "C01")
+
+    first_line = "첫 번째 승인된 기록입니다."
+    second_line = "두 번째 승인된 기록입니다."
+
+    original = first_line + "\n" + second_line
+
+    prepare_mock.return_value = replace(
+        prepare_mock.return_value,
+        reply_plan=make_quote_format_plan(original),
+    )
+
+    generate = MagicMock(
+        side_effect=[
+            quote_format_output(original),
+            quote_format_output(first_line),
+        ]
+    )
+
+    turn = module.run_npc_chat(
+        QUESTION,
+        state=state,
+        session_store=store,
+        resources=None,
+        generate=generate,
+    )
+
+    assert turn.reply.grounded
+    assert turn.reply.source_ids == (SOURCE_ID,)
+    assert first_line in turn.display_text
+    assert second_line not in turn.display_text
+
+    assert turn.display_text != FALLBACK_REPLY
+    assert turn.exchange.display_text == turn.display_text
+    assert turn.exchange.npc_message == turn.reply.text
+
+    assert generate.call_count == 2
+
+    retry_prompt = generate.call_args.args[0][0]["content"]
+
+    assert "줄바꿈 없는 단일 행" in retry_prompt
+
+
+def test_guard_rejects_joined_lines_not_in_original():
+    from crimescene.retriever import npc_output_guard as guard
+
+    first_line = "첫 번째 승인된 기록입니다."
+    second_line = "두 번째 승인된 기록입니다."
+
+    plan = make_quote_format_plan(
+        first_line + "\n" + second_line
+    )
+
+    context = plan.authorized_context
+
+    output = quote_format_output(
+        first_line + " " + second_line
+    )
+
+    assert guard._verify_quotes(output, context) == ()
+
+    assert guard._quote_failure_reason(
+        output, context
+    ) == "QUOTE_NOT_IN_SOURCE"

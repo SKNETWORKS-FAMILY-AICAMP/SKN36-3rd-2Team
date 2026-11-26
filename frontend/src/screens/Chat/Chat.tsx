@@ -301,9 +301,11 @@ export default function Chat() {
           인물 선택
           ====================================================== */}
 
+      {/* data-tutorial: 튜토리얼이 가리킬 위치. 이름은 A와 맞춘다 (interview-*) */}
       <ul
         className={styles.row}
         aria-label="인물 선택"
+        data-tutorial="interview-npc-list"
       >
         {NPC_PUBLIC.map((n) => {
           const open = unlocked.includes(n.id)
@@ -362,7 +364,7 @@ export default function Chat() {
             NPC 프로필
             ================================================== */}
 
-        <aside className={styles.profile}>
+        <aside className={styles.profile} data-tutorial="interview-profile">
           <div className={styles.frame}>
             <span
               className={styles.tape}
@@ -412,6 +414,7 @@ export default function Chat() {
         <section
           className={styles.chat}
           aria-label={`${npc.name}와의 대화`}
+          data-tutorial="interview-chat"
         >
           <header className={styles.chatHead}>
             <b className="serif">
@@ -437,6 +440,7 @@ export default function Chat() {
           {(available.length > 0 || collectError) && (
             <div
               className={styles.collectPanel}
+              data-tutorial="interview-collect"
               role="region"
               aria-label="확보 가능한 증거"
             >
@@ -533,6 +537,7 @@ export default function Chat() {
                     <button
                       type="button"
                       className={styles.saveBtn}
+                      data-tutorial="interview-save-statement"
                       aria-pressed={savedIds.has(`${npc.id}:${message.text}`)}
                       onClick={() => toggleStatement({ id: `${npc.id}:${message.text}`, npcId: npc.id, text: message.text })}
                     >
@@ -604,7 +609,7 @@ export default function Chat() {
             }}
           >
             {picked && (
-              <p className={styles.picked}>
+              <p className={styles.picked} data-tutorial="interview-picked">
                 <FileSearch size={14} />
                 제시할 증거: <b>{evidence[picked]?.title ?? picked}</b>
                 <span>질문을 함께 적거나 그대로 보내세요.</span>
@@ -616,6 +621,7 @@ export default function Chat() {
               className="btn"
               onClick={() => setPickOpen(true)}
               disabled={busy}
+              data-tutorial="interview-present"
             >
               <FileSearch size={16} />
               증거 제시
@@ -627,6 +633,7 @@ export default function Chat() {
               onClick={() =>
                 useNoteStore.getState().setPanel(true)
               }
+              data-tutorial="interview-notes"
             >
               <NotebookPen size={16} />
               추리 노트
@@ -634,7 +641,7 @@ export default function Chat() {
 
             {/* Issue #59: 최대 200자 입력창 */}
 
-            <div className={styles.messageField}>
+            <div className={styles.messageField} data-tutorial="interview-input">
               <textarea
                 value={text}
                 rows={1}

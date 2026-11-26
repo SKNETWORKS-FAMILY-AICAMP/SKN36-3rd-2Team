@@ -38,6 +38,8 @@ interface BackendGameState {
   outcome: string | null
   revision: number
   currentChapter?: string
+  e30ConsentAvailable?: boolean
+  e30ConsentGranted?: boolean
   events: BackendEvent[]
 }
 
@@ -239,6 +241,8 @@ function toSessionState(
     revision: game.revision,
     evidenceTotal,
     currentChapter: game.currentChapter,
+    consentAvailable: game.e30ConsentAvailable ?? false,
+    consentGranted: game.e30ConsentGranted ?? false,
   }
 }
 
@@ -582,6 +586,13 @@ export const httpApi: GameApi = {
     await request(`${path}/give-up`, post({ expectedRevision: game.revision }))
     const ending = await request<EndingDetails>(`${path}/ending`)
     return endingToResponse(ending, game.attemptsLeft)
+  },
+
+  // 민감 기록 열람 동의. 서버가 조건·권한을 확인하고, 409면 호출한 쪽에서 상태를 다시 읽는다
+  giveConsent: async (sessionId: string): Promise<void> => {
+    const path = gamePath(sessionId)
+    const game = await request<BackendGameState>(path)
+    await request(`${path}/consent`, post({ expectedRevision: game.revision, consent: true }))
   },
 
   // 엔딩 이미지 (게임 종료 후에만). 서버가 확정한 엔딩의 이미지만 순서대로 준다. url은 /api부터 시작하는 경로라 API 서버 주소와 합친다.

@@ -22,6 +22,8 @@ export interface GameApi {
   getHint(sessionId: string): Promise<string>
   /** 엔딩 이미지 주소 목록(게임 종료 후). 이미지 없는 엔딩은 빈 배열 */
   getEndingImages(sessionId: string): Promise<string[]>
+  /** 민감 기록 열람 동의 (서버가 동의 가능하다고 할 때만) */
+  giveConsent(sessionId: string): Promise<void>
 }
 
 export const api: GameApi = httpApi

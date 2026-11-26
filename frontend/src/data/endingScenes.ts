@@ -14,6 +14,7 @@ export interface SceneLine {
 
 const IMG = {
   unproven: 'assets/ending/unproven.webp',
+  // 스포일러라 공개 폴더에서 뺌. 서버 엔딩 이미지 API가 나오면 그 주소로 바꾼다 (지금은 이미지 없이 어두운 배경)
   escaped: 'assets/ending/escaped.webp',
   cardUnproven: 'assets/ending/card_unproven.webp',
   cardEscaped: 'assets/ending/card_escaped.webp',

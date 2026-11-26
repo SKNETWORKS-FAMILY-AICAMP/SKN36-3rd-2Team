@@ -90,6 +90,9 @@ class GameState(BaseModel):
     # 게임 진행 플래그
     flags: list[str]
 
+    # Explicit player consent; not subject consent or safety approval.
+    e30_player_consent: bool = False
+
     # Server-owned event queue. Defaults preserve legacy SQLite saves.
     queued_story_events: list[str] = Field(
         default_factory=list,
@@ -195,6 +198,12 @@ class GameState(BaseModel):
                 )
             ):
                 raise ValueError("Invalid ending state")
+
+        if (
+            self.e30_player_consent
+            and self.content_version != "case001_1120"
+        ):
+            raise ValueError("Invalid E30 consent state")
 
         valid_npcs = {f"C{i:02d}" for i in range(1, 11)}
 

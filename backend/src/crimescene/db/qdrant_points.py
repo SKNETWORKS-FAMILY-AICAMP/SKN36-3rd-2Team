@@ -8,13 +8,17 @@ from qdrant_client import models
 from crimescene.db.qdrant_collection import (
     DENSE_VECTOR_NAME,
     DENSE_VECTOR_SIZE,
+    SPARSE_VECTOR_NAME,
 )
+from crimescene.db.qdrant_bm25 import validate_sparse_vector
 from crimescene.ingest.hybrid_chunker import HybridChunkRecord
 
 
 def build_qdrant_point(
     record: HybridChunkRecord,
     dense_vector: Sequence[float],
+    *,
+    sparse_vector: models.SparseVector | None = None,
 ) -> models.PointStruct:
     """Hybrid 청크와 Dense Vector를 Qdrant Point로 변환한다.
 
@@ -75,10 +79,14 @@ def build_qdrant_point(
     }
 
     # 7. Qdrant Point 생성
+    vectors = {DENSE_VECTOR_NAME: vector}
+
+    if sparse_vector is not None:
+        validate_sparse_vector(sparse_vector)
+        vectors[SPARSE_VECTOR_NAME] = sparse_vector
+
     return models.PointStruct(
         id=chunk.point_id,
-        vector={
-            DENSE_VECTOR_NAME: vector,
-        },
+        vector=vectors,
         payload=payload,
     )

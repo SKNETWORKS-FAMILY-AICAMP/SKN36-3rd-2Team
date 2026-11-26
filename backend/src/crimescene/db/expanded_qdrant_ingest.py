@@ -231,6 +231,7 @@ def main():
 
         print("ADD:", len(plan.added))
         print("UPDATE:", len(plan.updated))
+        print("SPARSE UPDATE:", len(plan.sparse_updated))
         print("UNCHANGED:", len(plan.unchanged))
         print("DELETE:", len(plan.deleted))
 
@@ -242,7 +243,12 @@ def main():
             exact=True,
         ).count
 
-        if existing_count != len(plan.unchanged):
+        expected_existing = (
+            len(plan.unchanged)
+            + len(plan.sparse_updated)
+        )
+
+        if existing_count != expected_existing:
             raise ValueError("Unexpected existing points")
 
         if not args.apply:

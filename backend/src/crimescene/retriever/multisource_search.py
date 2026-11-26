@@ -64,6 +64,7 @@ def search_multisource_candidates(
     published_holder_ids: tuple[str, ...] = (),
     rrf_k: int = 60,
     collection_name: str | None = None,
+    vector_query: str | None = None,
 ) -> list[FusedSearchCandidate]:
     """NPC 대화용 Dense + BM25 + Graph 통합 후보 검색.
 
@@ -92,6 +93,25 @@ def search_multisource_candidates(
 
     if not isinstance(state, GameState):
         raise TypeError("GameState가 필요합니다.")
+
+    if vector_query is None:
+        vector_query = query
+    else:
+        if not isinstance(vector_query, str):
+            raise TypeError("Invalid vector query")
+
+        if state.content_version != "case001_1120":
+            raise PermissionError("Expanded query unavailable")
+
+        if (
+            len(vector_query) > 4000
+            or len(vector_query) - len(query) > 201
+            or not (
+                vector_query == query
+                or vector_query.startswith(query + " ")
+            )
+        ):
+            raise ValueError("Invalid vector query expansion")
 
     if state.case_id != CASE_ID:
         raise ValueError("지원하지 않는 사건 ID입니다.")
@@ -150,6 +170,17 @@ def search_multisource_candidates(
             reject_inaccessible_mentions=True,
         )
 
+        # Expanded terms must also pass existing access checks.
+        if vector_query != query:
+            extract_question_entities(
+                vector_query,
+                registry=registry,
+                state=state,
+                evidence_rules=evidence_rules,
+                allowed_entity_ids=allowed_entities,
+                reject_inaccessible_mentions=True,
+            )
+
     except InaccessibleEntityMentionError:
         # 잠긴 인물이나 미수집 증거를 명시적으로 질문하면
         # Qdrant와 Neo4j 모두 조회하지 않는다.
@@ -187,7 +218,7 @@ def search_multisource_candidates(
     dense_started = perf_counter()
 
     dense_results = search_dense_candidates(
-        query,
+        vector_query,
         client=qdrant_client,
         embedder=embedder,
         source_type="npc_knowledge",
@@ -207,7 +238,7 @@ def search_multisource_candidates(
     bm25_started = perf_counter()
 
     sparse_results = search_sparse_candidates(
-        query,
+        vector_query,
         client=qdrant_client,
         encoder=encoder,
         source_type="npc_knowledge",

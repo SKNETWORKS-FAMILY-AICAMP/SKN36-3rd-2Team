@@ -339,3 +339,169 @@ def test_other_npc_emotion_rejected():
             context,
             NPCEmotionalState("C02"),
         )
+
+
+# Issue #175 - context-aware vector query
+
+from crimescene.chat.npc_context_query import (
+    build_evidence_search_query,
+)
+
+
+def make_query_rules():
+    return {
+        "E01": EvidenceRule(
+            name="Emergency exit records",
+            score=1,
+            holder="C01",
+            prerequisites=[],
+            presentation=[],
+            q=[],
+        )
+    }
+
+
+def build_test_query(question, state, context, **kwargs):
+    return build_evidence_search_query(
+        question,
+        state=state,
+        character_id=kwargs.get("npc", "C01"),
+        evidence_dialogue=context,
+        evidence_rules=kwargs.get(
+            "rules", make_query_rules()
+        ),
+    )
+
+
+def test_context_query_preserves_original():
+    before = make_state()
+    event = present(before)
+    context = derive(before, event)
+
+    original = "Explain this evidence."
+
+    result = build_test_query(
+        original, event.state, context
+    )
+
+    assert result.startswith(original + " ")
+    assert result.endswith(
+        "E01 Emergency exit records"
+    )
+
+
+def test_context_query_does_not_duplicate_title():
+    before = make_state()
+    event = present(before)
+    context = derive(before, event)
+
+    original = "Explain Emergency exit records."
+
+    result = build_test_query(
+        original, event.state, context
+    )
+
+    assert result == original + " E01"
+
+
+def test_context_query_is_idempotent():
+    before = make_state()
+    event = present(before)
+    context = derive(before, event)
+
+    original = "Explain E01 Emergency exit records."
+
+    assert build_test_query(
+        original, event.state, context
+    ) == original
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("session_id", "OTHER-SESSION"),
+        ("revision", 999),
+        ("evidence_id", "E26"),
+        ("evidence_id", "E30"),
+        ("character_id", "C02"),
+    ],
+)
+def test_context_query_rejects_invalid_context(
+    field,
+    value,
+):
+    before = make_state()
+    event = present(before)
+    context = derive(before, event)
+
+    invalid = replace(context, **{field: value})
+
+    with pytest.raises(PermissionError):
+        build_test_query(
+            "Explain this evidence.",
+            event.state,
+            invalid,
+        )
+
+
+def test_context_query_rejects_unpresented_evidence():
+    before = make_state()
+    event = present(before)
+    context = derive(before, event)
+
+    changed = event.state.model_copy(
+        update={"presented": {}}
+    )
+
+    with pytest.raises(PermissionError):
+        build_test_query(
+            "Explain this evidence.",
+            changed,
+            context,
+        )
+
+
+def test_context_query_rejects_unknown_rule():
+    before = make_state()
+    event = present(before)
+    context = derive(before, event)
+
+    with pytest.raises(PermissionError):
+        build_test_query(
+            "Explain this evidence.",
+            event.state,
+            context,
+            rules={},
+        )
+
+
+def test_context_query_does_not_mutate_state():
+    before = make_state()
+    event = present(before)
+    context = derive(before, event)
+
+    snapshot = event.state.model_dump()
+
+    build_test_query(
+        "Explain this evidence.",
+        event.state,
+        context,
+    )
+
+    assert event.state.model_dump() == snapshot
+
+
+def test_context_query_preserves_max_length():
+    from crimescene.chat.npc_session import (
+        MAX_MESSAGE_LENGTH,
+    )
+
+    before = make_state()
+    event = present(before)
+    context = derive(before, event)
+
+    question = "x" * MAX_MESSAGE_LENGTH
+
+    assert build_test_query(
+        question, event.state, context
+    ) == question

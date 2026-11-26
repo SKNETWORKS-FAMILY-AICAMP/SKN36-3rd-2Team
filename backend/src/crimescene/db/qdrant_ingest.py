@@ -13,6 +13,10 @@ from crimescene.db.qdrant_points import build_qdrant_point
 from crimescene.ingest.hybrid_chunker import HybridChunkRecord
 from crimescene.ingest.ollama_embedder import OllamaEmbedder
 
+from crimescene.retriever.versioned_retrieval import (
+    REVISION2_COLLECTION,
+)
+
 DEFAULT_INGEST_BATCH_SIZE = 16
 
 
@@ -56,6 +60,11 @@ def upsert_hybrid_records(
         raise ValueError("컬렉션 이름이 비어 있습니다.")
 
     # 3. 입력 청크 목록 생성
+    if collection_name == REVISION2_COLLECTION:
+        raise ValueError(
+            "Revision2 requires sync_qdrant_records"
+        )
+
     source_records = list(records)
 
     if not source_records:

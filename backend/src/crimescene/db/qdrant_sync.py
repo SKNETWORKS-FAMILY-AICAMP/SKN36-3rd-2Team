@@ -1,18 +1,27 @@
 """CASE-001 Qdrant 데이터 동기화 및 변경사항 검증."""
 
 from collections.abc import Collection, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from qdrant_client import QdrantClient, models
 
 from crimescene.db.ingest_integrity import validate_qdrant_records
 from crimescene.db.qdrant_collection import (
     COLLECTION_NAME,
+    SPARSE_VECTOR_NAME,
     ensure_qdrant_collection,
+)
+from crimescene.db.qdrant_bm25 import (
+    build_corpus_sparse_vectors,
+    find_sparse_mismatches,
 )
 from crimescene.db.qdrant_points import build_qdrant_point
 from crimescene.ingest.hybrid_chunker import HybridChunkRecord
 from crimescene.ingest.ollama_embedder import OllamaEmbedder
+
+from crimescene.retriever.versioned_retrieval import (
+    REVISION2_COLLECTION,
+)
 
 CASE_ID = "CASE-001"
 MANAGED_SOURCE_TYPES = ("player_document", "npc_knowledge")
@@ -26,10 +35,16 @@ class QdrantSyncPlan:
     updated: tuple[str, ...]
     unchanged: tuple[str, ...]
     deleted: tuple[str, ...]
+    sparse_updated: tuple[str, ...] = ()
 
     @property
     def total_changes(self) -> int:
-        return len(self.added) + len(self.updated) + len(self.deleted)
+        return (
+            len(self.added)
+            + len(self.updated)
+            + len(self.deleted)
+            + len(self.sparse_updated)
+        )
 
 
 def _expected_payload(record: HybridChunkRecord) -> dict:
@@ -243,6 +258,33 @@ def sync_qdrant_records(
     )
 
     # Dry Run에서는 DB를 수정하지 않음
+    hybrid_enabled = collection_name == REVISION2_COLLECTION
+
+    sparse_vectors = (
+        build_corpus_sparse_vectors(source_records)
+        if hybrid_enabled else {}
+    )
+
+    if hybrid_enabled:
+        sparse_updates = find_sparse_mismatches(
+            client,
+            collection_name,
+            plan.unchanged,
+            sparse_vectors,
+        )
+
+        sparse_update_ids = set(sparse_updates)
+
+        plan = replace(
+            plan,
+            unchanged=tuple(
+                point_id
+                for point_id in plan.unchanged
+                if point_id not in sparse_update_ids
+            ),
+            sparse_updated=sparse_updates,
+        )
+
     if dry_run:
         return plan
 
@@ -271,7 +313,17 @@ def sync_qdrant_records(
             raise ValueError("청크 개수와 임베딩 개수가 일치하지 않습니다.")
 
         points = [
-            build_qdrant_point(record, vector)
+            build_qdrant_point(
+                record,
+                vector,
+                **(
+                    {
+                        "sparse_vector":
+                            sparse_vectors[record.chunk.point_id]
+                    }
+                    if hybrid_enabled else {}
+                ),
+            )
             for record, vector in zip(
                 changed_records,
                 vectors,
@@ -286,6 +338,25 @@ def sync_qdrant_records(
         )
 
     # 6. 추가·수정이 성공한 뒤 오래된 Point 삭제
+    if plan.sparse_updated:
+        result = client.update_vectors(
+            collection_name=collection_name,
+            points=[
+                models.PointVectors(
+                    id=point_id,
+                    vector={
+                        SPARSE_VECTOR_NAME:
+                            sparse_vectors[point_id],
+                    },
+                )
+                for point_id in plan.sparse_updated
+            ],
+            wait=True,
+        )
+
+        if result.status != models.UpdateStatus.COMPLETED:
+            raise RuntimeError("Sparse vector update incomplete")
+
     if plan.deleted:
         client.delete(
             collection_name=collection_name,
@@ -309,5 +380,19 @@ def sync_qdrant_records(
 
         if (actual[point_id].payload or {}) != _expected_payload(record):
             raise RuntimeError(f"동기화 후 Point 메타데이터 불일치: {point_id}")
+
+
+    if hybrid_enabled:
+        mismatches = find_sparse_mismatches(
+            client,
+            collection_name,
+            expected_ids,
+            sparse_vectors,
+        )
+
+        if mismatches:
+            raise RuntimeError(
+                "Final sparse vector verification failed"
+            )
 
     return plan

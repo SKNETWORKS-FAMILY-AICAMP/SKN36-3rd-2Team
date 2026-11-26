@@ -1,0 +1,8 @@
+/* 열람 전 동의 모달 (증거 제시 모달과 같은 톤) */
+.backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: rgba(0,0,0,.75); padding: 16px; }
+.modal { width: min(480px, 100%); background: var(--ink-800); border: 1px solid var(--brass-700); padding: 20px 22px; box-shadow: var(--shadow-deep); }
+.modal h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; font-size: 18px; color: var(--paper-100); }
+.body p { margin: 0 0 10px; font-size: 14px; line-height: 1.7; color: var(--paper-200); }
+.error { margin: 4px 0 0; font-size: 13px; color: var(--blood-400); }
+.actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+.agree { border-color: var(--brass-500); color: var(--brass-400); }

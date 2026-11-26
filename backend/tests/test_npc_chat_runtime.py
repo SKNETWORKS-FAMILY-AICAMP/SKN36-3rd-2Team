@@ -552,3 +552,233 @@ def test_expanded_unapproved_source_still_blocked(environment):
     assert "PRIVATE_SECRET_SENTINEL" not in turn.display_text
 
     assert generate.call_count == 2
+
+
+# Issue #172 - repeat memory integration
+
+
+def test_expanded_repeat_reuses_verified_memory(environment):
+    from dataclasses import replace
+
+    state, _, prepare_mock = environment
+
+    state = state.model_copy(
+        update={"content_version": "case001_1120"}
+    )
+
+    store = NPCSessionStore()
+    store.select_npc(state, "C01")
+
+    generate = MagicMock(return_value=valid_llm_output())
+
+    first = module.run_npc_chat(
+        QUESTION,
+        state=state,
+        session_store=store,
+        resources=None,
+        generate=generate,
+    )
+
+    prepare_mock.return_value = replace(
+        prepare_mock.return_value,
+        history=store.get_history(state, "C01"),
+    )
+
+    second = module.run_npc_chat(
+        QUESTION,
+        state=state,
+        session_store=store,
+        resources=None,
+        generate=generate,
+    )
+
+    assert first.reply.grounded
+    assert second.reply.grounded
+    assert first.reply == second.reply
+
+    # Second turn reuses verified memory, not the model.
+    assert generate.call_count == 1
+    assert prepare_mock.call_count == 2
+
+    assert prepare_mock.call_args.kwargs[
+        "use_memory_context"
+    ] is True
+
+    assert len(store.get_history(state, "C01")) == 2
+
+
+def test_expanded_evidence_turn_does_not_replay_memory(environment):
+    from dataclasses import replace
+
+    state, _, prepare_mock = environment
+
+    state = type(state).model_validate({
+        **state.model_dump(),
+        "content_version": "case001_1120",
+        "evidence": {
+            "E01": {"stage": "found"},
+        },
+        "presented": {'C01': ['E01']},
+    })
+
+    store = NPCSessionStore()
+    store.select_npc(state, "C01")
+
+    generate = MagicMock(return_value=valid_llm_output())
+
+    module.run_npc_chat(
+        QUESTION,
+        state=state,
+        session_store=store,
+        resources=None,
+        generate=generate,
+    )
+
+    prepare_mock.return_value = replace(
+        prepare_mock.return_value,
+        history=store.get_history(state, "C01"),
+    )
+
+    turn = module.run_npc_chat(
+        QUESTION,
+        state=state,
+        session_store=store,
+        resources=None,
+        generate=generate,
+        evidence_just_presented=True,
+    )
+
+    assert turn.reply.grounded
+    assert generate.call_count == 2
+
+    assert not prepare_mock.call_args.kwargs.get(
+        "use_memory_context", False
+    )
+
+
+# Issue #172 - safe recall runtime integration
+
+MEMORY_RECALL_QUESTION = (
+    "제가 아까 어떤 질문을 했는지 기억하세요?"
+)
+
+MEMORY_PREVIOUS_QUESTION = (
+    "방금 말씀하신 내용을 좀 더 자세히 설명해 주세요."
+)
+
+
+def test_expanded_memory_recall_without_llm(environment):
+    state, _, prepare_mock = environment
+
+    state = state.model_copy(
+        update={"content_version": "case001_1120"}
+    )
+
+    store = NPCSessionStore()
+    store.select_npc(state, "C01")
+
+    store.append_verified_exchange(
+        state,
+        "C01",
+        user_message=MEMORY_PREVIOUS_QUESTION,
+        reply=module.NPCGroundedReply(
+            text=module.FALLBACK_REPLY,
+            source_ids=(),
+            grounded=False,
+        ),
+    )
+
+    generate = MagicMock(
+        side_effect=AssertionError("Unexpected LLM call")
+    )
+
+    turn = module.run_npc_chat(
+        MEMORY_RECALL_QUESTION,
+        state=state,
+        session_store=store,
+        resources=None,
+        generate=generate,
+    )
+
+    assert "직전 답변을 더 설명해 달라고" in turn.reply.text
+    assert not turn.reply.grounded
+    assert not turn.reply.source_ids
+    assert turn.display_text == turn.exchange.npc_message
+
+    generate.assert_not_called()
+    prepare_mock.assert_not_called()
+
+    assert len(store.get_history(state, "C01")) == 2
+
+
+def test_expanded_memory_recall_without_history(environment):
+    state, _, prepare_mock = environment
+
+    state = state.model_copy(
+        update={"content_version": "case001_1120"}
+    )
+
+    store = NPCSessionStore()
+    store.select_npc(state, "C01")
+
+    generate = MagicMock(
+        side_effect=AssertionError("Unexpected LLM call")
+    )
+
+    turn = module.run_npc_chat(
+        MEMORY_RECALL_QUESTION,
+        state=state,
+        session_store=store,
+        resources=None,
+        generate=generate,
+    )
+
+    assert turn.reply.text == "아직 저와 나눈 대화가 없습니다."
+    assert len(store.get_history(state, "C01")) == 1
+
+    generate.assert_not_called()
+    prepare_mock.assert_not_called()
+
+
+def test_session_rejects_fabricated_memory_reply(environment):
+    state, _, _ = environment
+
+    state = state.model_copy(
+        update={"content_version": "case001_1120"}
+    )
+
+    store = NPCSessionStore()
+    store.select_npc(state, "C01")
+
+    # A valid server phrase is still invalid without matching history.
+    forged = module.NPCGroundedReply(
+        text="네. 직전 답변을 더 설명해 달라고 하셨습니다.",
+        source_ids=(),
+        grounded=False,
+    )
+
+    with pytest.raises(ValueError):
+        store.append_verified_exchange(
+            state,
+            "C01",
+            user_message=MEMORY_RECALL_QUESTION,
+            reply=forged,
+        )
+
+    assert store.get_history(state, "C01") == ()
+
+
+def test_legacy_memory_recall_preserves_rag_path(environment):
+    state, store, prepare_mock = environment
+
+    generate = MagicMock(return_value=valid_llm_output())
+
+    module.run_npc_chat(
+        MEMORY_RECALL_QUESTION,
+        state=state,
+        session_store=store,
+        resources=None,
+        generate=generate,
+    )
+
+    prepare_mock.assert_called_once()

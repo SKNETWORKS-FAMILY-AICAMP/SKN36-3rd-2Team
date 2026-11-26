@@ -5,6 +5,13 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 
 from crimescene.chat.llm_client import generate_npc_json
+from crimescene.chat.npc_memory_recall import (
+    build_memory_recall_from_history,
+    is_memory_recall_question,
+)
+from crimescene.chat.npc_conversation_memory import (
+    build_revalidated_repeat_output,
+)
 from crimescene.chat.npc_dialogue_intent import build_npc_intent_prompt
 from crimescene.chat.npc_dynamic_persona import build_dynamic_npc_prompt
 from crimescene.chat.npc_history_context import (
@@ -110,7 +117,14 @@ def run_npc_chat(
         else match_safe_social_intent(query)
     )
 
-    if social_intent is not None:
+    recall_requested = (
+        state.case_id == "CASE-001"
+        and state.content_version == "case001_1120"
+        and not evidence_just_presented
+        and is_memory_recall_question(query)
+    )
+
+    if social_intent is not None or recall_requested:
         character_id = session_store.get_active_npc(state)
 
         if character_id is None:
@@ -123,18 +137,30 @@ def run_npc_chat(
             character_id,
         )
 
-        reaction = detect_npc_reaction(
-            query,
-            character_id=character_id,
-            state=state,
-            history=history,
-        )
+        if recall_requested:
+            social_text = (
+                build_memory_recall_from_history(
+                    character_id,
+                    query,
+                    history,
+                    current_revision=state.revision,
+                )
+                or FALLBACK_REPLY
+            )
 
-        social_text = build_safe_social_reply(
-            character_id,
-            query,
-            repeated=reaction.mode == "repeated",
-        )
+        else:
+            reaction = detect_npc_reaction(
+                query,
+                character_id=character_id,
+                state=state,
+                history=history,
+            )
+
+            social_text = build_safe_social_reply(
+                character_id,
+                query,
+                repeated=reaction.mode == "repeated",
+            )
 
         reply = NPCGroundedReply(
             text=social_text,
@@ -176,6 +202,14 @@ def run_npc_chat(
         session_store=session_store,
         resources=resources,
         matched_topics=topics,
+        **(
+            {"use_memory_context": True}
+            if (
+                state.content_version == "case001_1120"
+                and not evidence_just_presented
+            )
+            else {}
+        ),
     )
 
     character_id = rag_result.character_id
@@ -262,11 +296,34 @@ def run_npc_chat(
             ),
         )
 
+        # Reuse only a currently authorized, exact matching reply.
+        cached_output = None
+
+        if (
+            state.content_version == "case001_1120"
+            and not evidence_just_presented
+        ):
+            cached_output = build_revalidated_repeat_output(
+                query,
+                rag_result.history,
+                current_revision=state.revision,
+                context=context,
+            )
+
+        selected_generate = generate
+
+        if cached_output is not None:
+            # Cached output passes the same guard as model output.
+            def replay_verified_quotes(_messages):
+                return cached_output
+
+            selected_generate = replay_verified_quotes
+
         # 기존 RAG 원문 및 출처 검증 유지
         reply = run_grounded_npc_response(
             contextual_plan,
             context,
-            generate=generate,
+            generate=selected_generate,
             **(
                 {"retry_empty_quotes": False}
                 if state.content_version == "case001_1120"
@@ -357,13 +414,21 @@ def run_npc_chat(
     # 8. 검증된 NPC 응답 저장
     # ==================================================
 
-    # 화면용 display_text는 저장하지 않음
-    # 검증된 원문과 출처만 세션에 저장
+    # Keep canonical quotes for memory validation.
+    # Persist presentation separately for expanded grounded turns.
     exchange = session_store.append_verified_exchange(
         state,
         character_id,
         user_message=query,
         reply=reply,
+        **(
+            {"display_text": display_text}
+            if (
+                state.content_version == "case001_1120"
+                and reply.grounded
+            )
+            else {}
+        ),
     )
 
     return NPCChatTurn(

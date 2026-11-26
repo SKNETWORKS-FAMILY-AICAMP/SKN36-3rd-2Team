@@ -24,6 +24,14 @@ function load(): NoteData {
   return empty()
 }
 
+/** 면담 중 저장한 NPC 진술. 노트처럼 이 기기에만 저장한다 */
+export interface SavedStatement { id: string; npcId: string; text: string }
+const STATEMENT_KEY = 'serin-statements-v1'
+function loadStatements(): SavedStatement[] {
+  try { const v = JSON.parse(localStorage.getItem(STATEMENT_KEY) ?? '[]'); if (Array.isArray(v)) return v } catch { /* ignore */ }
+  return []
+}
+
 const WIDTH_KEY = 'serin-notes-width'
 export const NOTE_MIN_W = 320
 export const NOTE_DEFAULT_W = 560
@@ -44,6 +52,9 @@ interface NoteStore {
   panelWidth: number
   setPanelWidth: (w: number) => void
   setNote: (key: NoteKey, text: string) => void
+  statements: SavedStatement[]
+  /** 같은 진술이면 저장 취소, 아니면 저장 */
+  toggleStatement: (s: SavedStatement) => void
   setPanel: (open: boolean) => void
   /** 새 게임 시작 시 노트를 비운다 */
   clear: () => void
@@ -51,6 +62,13 @@ interface NoteStore {
 
 export const useNoteStore = create<NoteStore>((set, get) => ({
   notes: load(),
+  statements: loadStatements(),
+  toggleStatement(s) {
+    const cur = get().statements
+    const statements = cur.some((x) => x.id === s.id) ? cur.filter((x) => x.id !== s.id) : [...cur, s]
+    set({ statements })
+    try { localStorage.setItem(STATEMENT_KEY, JSON.stringify(statements)) } catch { /* ignore */ }
+  },
   panelOpen: false,
   panelWidth: loadWidth(),
   setPanelWidth(w) {
@@ -65,7 +83,7 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
   },
   setPanel: (panelOpen) => set({ panelOpen }),
   clear() {
-    set({ notes: empty(), panelOpen: false })
-    try { localStorage.removeItem(KEY) } catch { /* ignore */ }
+    set({ notes: empty(), statements: [], panelOpen: false })
+    try { localStorage.removeItem(KEY); localStorage.removeItem(STATEMENT_KEY) } catch { /* ignore */ }
   },
 }))

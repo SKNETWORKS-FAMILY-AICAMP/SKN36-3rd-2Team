@@ -14,6 +14,10 @@ from crimescene.chat.npc_conversation_memory import (
 )
 from crimescene.chat.npc_dialogue_intent import build_npc_intent_prompt
 from crimescene.chat.npc_dynamic_persona import build_dynamic_npc_prompt
+from crimescene.chat.npc_emotional_state import (
+    build_npc_emotion_prompt,
+    derive_npc_emotional_state,
+)
 from crimescene.chat.npc_history_context import (
     build_contextual_npc_reply_plan,
 )
@@ -222,6 +226,20 @@ def run_npc_chat(
     # 4. Ollama 호출 및 근거 인용 검증
     # ==================================================
 
+    emotion = None
+
+    if (
+        state.content_version == "case001_1120"
+        and not evidence_just_presented
+        and plan.can_call_llm
+    ):
+        emotion = derive_npc_emotional_state(
+            query,
+            state=state,
+            character_id=character_id,
+            history=rag_result.history,
+        )
+
     if plan.can_call_llm:
         context = plan.authorized_context
 
@@ -290,6 +308,11 @@ def run_npc_chat(
                         + reaction_prompt
                         + persona_suffix
                         + intent_suffix
+                        + (
+                            "\n\n" + build_npc_emotion_prompt(emotion)
+                            if emotion is not None
+                            else ""
+                        )
                     ),
                 },
                 user_message,
@@ -404,7 +427,14 @@ def run_npc_chat(
             context=context,
             reaction=reaction,
             **(
-                {"expanded_persona": True}
+                {
+                    "expanded_persona": True,
+                    **(
+                        {"emotion": emotion}
+                        if emotion is not None
+                        else {}
+                    ),
+                }
                 if state.content_version == "case001_1120"
                 else {}
             ),

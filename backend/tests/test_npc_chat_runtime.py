@@ -782,3 +782,176 @@ def test_legacy_memory_recall_preserves_rag_path(environment):
     )
 
     prepare_mock.assert_called_once()
+
+# ============================================================
+# Issue #173 - emotional runtime integration
+# ============================================================
+
+EMOTION_PRESSURE = "거짓말하고 계신 거 아닌가요?"
+
+
+def prepare_emotional_runtime(environment, monkeypatch):
+    from dataclasses import replace
+
+    state, _, _ = environment
+
+    state = state.model_copy(
+        update={"content_version": "case001_1120"}
+    )
+
+    store = NPCSessionStore()
+    store.select_npc(state, "C01")
+
+    for _ in range(3):
+        store.append_verified_exchange(
+            state,
+            "C01",
+            user_message=EMOTION_PRESSURE,
+            reply=module.NPCGroundedReply(
+                text=module.FALLBACK_REPLY,
+                source_ids=(),
+                grounded=False,
+            ),
+        )
+
+    original_prepare = module.prepare_npc_chat_rag
+
+    def prepare(*args, **kwargs):
+        result = original_prepare(*args, **kwargs)
+
+        return replace(
+            result,
+            history=store.get_history(
+                state,
+                result.character_id,
+            ),
+        )
+
+    monkeypatch.setattr(
+        module,
+        "prepare_npc_chat_rag",
+        prepare,
+    )
+
+    return state, store
+
+
+def test_emotion_runtime_applies_tense_opener(
+    environment,
+    monkeypatch,
+):
+    state, store = prepare_emotional_runtime(
+        environment,
+        monkeypatch,
+    )
+
+    before = state.model_dump()
+
+    generate = MagicMock(
+        return_value=valid_llm_output()
+    )
+
+    turn = module.run_npc_chat(
+        EMOTION_PRESSURE,
+        state=state,
+        session_store=store,
+        resources=None,
+        generate=generate,
+    )
+
+    assert turn.reply.grounded
+
+    assert turn.display_text.startswith(
+        "잠시만요. 핵심만 말씀드리겠습니다.\n"
+    )
+
+    assert turn.exchange.display_text == turn.display_text
+    assert turn.exchange.npc_message == turn.reply.text
+    assert state.model_dump() == before
+
+    generate.assert_called_once()
+
+    messages = generate.call_args.args[0]
+
+    assert "[NPC EMOTIONAL STATE]" in messages[0]["content"]
+    assert "짧고 통제된 표현" in messages[0]["content"]
+
+
+def test_emotion_runtime_keeps_fallback(
+    environment,
+    monkeypatch,
+):
+    state, store = prepare_emotional_runtime(
+        environment,
+        monkeypatch,
+    )
+
+    generate = MagicMock(
+        return_value='{"quotes": []}'
+    )
+
+    turn = module.run_npc_chat(
+        EMOTION_PRESSURE,
+        state=state,
+        session_store=store,
+        resources=None,
+        generate=generate,
+    )
+
+    assert turn.reply.text == module.FALLBACK_REPLY
+    assert turn.display_text == module.FALLBACK_REPLY
+    assert not turn.reply.grounded
+    assert turn.reply.source_ids == ()
+
+    assert turn.exchange.display_text is None
+
+    generate.assert_called_once()
+
+
+def test_emotion_runtime_does_not_leak_attack_into_prompt(
+    environment,
+    monkeypatch,
+):
+    state, store = prepare_emotional_runtime(
+        environment,
+        monkeypatch,
+    )
+
+    sentinel = "PRIVATE_EMOTION_ATTACK_173"
+
+    generate = MagicMock(
+        return_value='{"quotes": []}'
+    )
+
+    turn = module.run_npc_chat(
+        EMOTION_PRESSURE + " " + sentinel,
+        state=state,
+        session_store=store,
+        resources=None,
+        generate=generate,
+    )
+
+    messages = generate.call_args.args[0]
+
+    assert sentinel not in messages[0]["content"]
+    assert turn.reply.text == module.FALLBACK_REPLY
+
+
+def test_legacy_runtime_has_no_emotional_prompt(environment):
+    state, store, _ = environment
+
+    generate = MagicMock(
+        return_value=valid_llm_output()
+    )
+
+    module.run_npc_chat(
+        EMOTION_PRESSURE,
+        state=state,
+        session_store=store,
+        resources=None,
+        generate=generate,
+    )
+
+    messages = generate.call_args.args[0]
+
+    assert "[NPC EMOTIONAL STATE]" not in messages[0]["content"]

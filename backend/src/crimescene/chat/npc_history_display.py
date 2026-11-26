@@ -69,6 +69,9 @@ def is_valid_stored_display(
 ) -> bool:
     """Allow only canonical content and server-owned NPC openers."""
 
+    from crimescene.chat.npc_emotional_state import (
+        EMOTION_OPENERS,
+    )
     from crimescene.chat.npc_natural_reply import (
         EXPANDED_NEUTRAL_OPENERS,
         REPEATED_OPENERS,
@@ -109,6 +112,7 @@ def is_valid_stored_display(
         EXPANDED_NEUTRAL_OPENERS[character_id],
         REPEATED_OPENERS[character_id],
         NEW_EVIDENCE_OPENERS[character_id],
+        *EMOTION_OPENERS[character_id],
     )
 
     allowed = {

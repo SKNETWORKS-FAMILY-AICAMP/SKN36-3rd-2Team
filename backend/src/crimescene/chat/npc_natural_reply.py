@@ -3,6 +3,10 @@
 import re
 from types import MappingProxyType
 
+from crimescene.chat.npc_emotional_state import (
+    NPCEmotionalState,
+    get_emotion_opener,
+)
 from crimescene.chat.npc_reaction import NPCReaction
 from crimescene.retriever.authorized_multisource_context import (
     AuthorizedMultisourceContext,
@@ -76,6 +80,7 @@ def render_npc_speech(
     context: AuthorizedMultisourceContext,
     reaction: NPCReaction,
     expanded_persona: bool = False,
+    emotion: NPCEmotionalState | None = None,
 ) -> str:
     """승인된 인용문을 NPC의 화면용 대화로 변환합니다.
 
@@ -97,6 +102,20 @@ def render_npc_speech(
 
     if reaction.character_id not in NPC_OPENERS:
         raise ValueError("지원하지 않는 NPC입니다.")
+
+    emotional_opener = None
+
+    if emotion is not None:
+        if not isinstance(emotion, NPCEmotionalState):
+            raise TypeError("Invalid emotional state")
+
+        if (
+            not expanded_persona
+            or emotion.character_id != reaction.character_id
+        ):
+            raise ValueError("Invalid emotional context")
+
+        emotional_opener = get_emotion_opener(emotion)
 
     if not reply.grounded:
         return FALLBACK_REPLY
@@ -147,6 +166,9 @@ def render_npc_speech(
 
     if reaction.mode == "new_evidence":
         opener = NEW_EVIDENCE_OPENERS[reaction.character_id]
+
+    elif emotional_opener is not None:
+        opener = emotional_opener
 
     elif reaction.mode == "repeated":
         opener = REPEATED_OPENERS[reaction.character_id]

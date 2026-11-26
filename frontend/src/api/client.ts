@@ -1,6 +1,6 @@
 import type {
   AccuseResponse, ChatReply, CreateSessionResponse, EvidenceDetail,
-  Message, RelationGraph, SessionState, AvailableEvidence, GameEvent, EndingDetails,
+  Message, RelationGraph, SessionState, AvailableEvidence, GameEvent, EndingDetails, ReconstructionSelections,
 } from './types'
 import { httpApi } from './httpApi'
 
@@ -16,6 +16,8 @@ export interface GameApi {
   getRelations(sessionId: string): Promise<RelationGraph>
   accuse(sessionId: string, suspectId: string, evidenceIds: string[]): Promise<AccuseResponse>
   getEnding(sessionId: string): Promise<EndingDetails>
+  giveUp(sessionId: string): Promise<AccuseResponse>
+  reconstruct(sessionId: string, selections: ReconstructionSelections): Promise<boolean>
 }
 
 export const api: GameApi = httpApi

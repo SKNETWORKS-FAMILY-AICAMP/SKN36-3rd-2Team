@@ -2,40 +2,54 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Navigate, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
-import { FileSearch, Lightbulb, Lock, NotebookPen, Send, X } from 'lucide-react'
+import { FileSearch, Lightbulb, NotebookPen, Pin, Send, X } from 'lucide-react'
 
 import Objective from '../../components/Objective'
+import ConsentModal from '../../components/ConsentModal'
+import { EvidenceCompare } from '../Evidence/EvidenceParts'
+import type { EmbedProps } from '../embed'
 import TopNav from '../../components/TopNav'
 import Toasts from '../../components/Toasts'
 import CharacterPortrait from '../../components/CharacterPortrait'
+import TypingText from '../../components/TypingText'
 
 import { MEETING_BG, NPC_PUBLIC } from '../../data/characters'
 import { useGameStore } from '../../store/gameStore'
-import { useChatStore } from '../../store/chatStore'
+import { MAX_DRAFT, useChatStore } from '../../store/chatStore'
 import { useNoteStore } from '../../store/noteStore'
 import { api } from '../../api/client'
+import { ApiHttpError, SERVER_PRESENT_MAX } from '../../api/httpApi'
 
-import type { AvailableEvidence } from '../../api/types'
+import type { AvailableEvidence, Message } from '../../api/types'
 import styles from './Chat.module.css'
 
 const EMPTY: never[] = []
+// 타이핑 효과를 이미 보여 준 답변 (다른 인물에게 갔다 돌아와도 다시 재생하지 않음)
+const typed = new WeakSet<Message>()
 
 // Issue #59: NPC 대화 입력 최대 길이
 const MAX_MESSAGE_LENGTH = 200
+const CONSENT_DECLINED_KEY = 'serin-consent-declined'
 
-export default function Chat() {
-  const { npcId } = useParams()
+export default function Chat({ embedded = false, npcId: npcProp, onNpcSelect }: EmbedProps & { npcId?: string } = {}) {
+  const params = useParams()
+  const npcId = npcProp ?? params.npcId
   const navigate = useNavigate()
   const { search } = useLocation()
+  // 인물 이동: 통합 화면이면 Play에 맡기고, 독립 화면이면 주소를 바꾼다
+  const selectNpc = (id: string) => (onNpcSelect ? onNpcSelect(id) : navigate({ pathname: `/chat/${id}`, search }))
 
   const session = useGameStore((s) => s.session)
   const ensure = useGameStore((s) => s.ensureSession)
   const evidence = useGameStore((s) => s.evidence)
+  const loadEvidence = useGameStore((s) => s.loadEvidence)
 
   const messages = useChatStore(
     (s) => (npcId ? s.messages[npcId] ?? EMPTY : EMPTY),
   )
 
+  // 가장 최근 인물 대사(통합 화면에서 강조)
+  const lastNpcIdx = embedded ? messages.map((m) => m.role).lastIndexOf('npc') : -1
   const allMessages = useChatStore((s) => s.messages)
   const typing = useChatStore((s) => s.typing)
   const isLoaded = useChatStore(
@@ -54,8 +68,44 @@ export default function Chat() {
 
   const [text, setText] = useState('')
   const [pickOpen, setPickOpen] = useState(false)
-  // 제시할 증거: 고르면 입력창 위에 표시되고, 다음 전송 때 질문과 함께 보낸다
-  const [picked, setPicked] = useState<string | null>(null)
+  // 고르는 창 안 「나란히 보기」(증거 2개를 좌우로)
+  const [sideBySide, setSideBySide] = useState(false)
+  const closePick = () => { setPickOpen(false); setSideBySide(false) }
+  // 제시할 증거(칩, 최대 2개): 입력창 위에 표시되고, 다음 전송 때 질문과 함께 보낸다
+  const draft = useChatStore((s) => s.draft)
+  const { addDraft, removeDraft, clearDraft } = useChatStore.getState()
+  const overServer = draft.length > SERVER_PRESENT_MAX
+  // 열람 동의: 서버가 동의 가능하다고 하고, 아직 동의·거절하지 않았을 때만 띄운다. 거절은 이번 게임(세션) 동안 기억한다
+  const refresh = useGameStore((s) => s.refresh)
+  const [declinedSid, setDeclinedSid] = useState<string | null>(() => {
+    try { return localStorage.getItem(CONSENT_DECLINED_KEY) } catch { return null }
+  })
+  const [consentBusy, setConsentBusy] = useState(false)
+  const [consentError, setConsentError] = useState<string | null>(null)
+  const consentOpen = !!session?.consentAvailable && !session.consentGranted && declinedSid !== session.sessionId
+  const declineConsent = () => {
+    if (!session) return
+    try { localStorage.setItem(CONSENT_DECLINED_KEY, session.sessionId) } catch { /* ignore */ }
+    setDeclinedSid(session.sessionId)
+  }
+  const agreeConsent = async () => {
+    if (!session || consentBusy) return
+    setConsentBusy(true)
+    setConsentError(null)
+    try {
+      await api.giveConsent(session.sessionId)
+      await refresh()
+    } catch (error) {
+      if (error instanceof ApiHttpError && error.status === 409) {
+        await refresh().catch(() => undefined)
+        setConsentError('지금은 동의할 수 없는 상태입니다. 게임 상태를 다시 불러왔습니다.')
+      } else {
+        setConsentError('동의를 저장하지 못했습니다. 잠시 후 다시 눌러 주세요.')
+      }
+    } finally {
+      setConsentBusy(false)
+    }
+  }
   // 힌트 1단계: 서버가 준 문장을 입력창 위에 보여 준다
   const [hint, setHint] = useState<{ text: string; error?: boolean } | null>(null)
   const [hintBusy, setHintBusy] = useState(false)
@@ -96,11 +146,12 @@ export default function Chat() {
   }, [sid, npcId, load])
 
   // 인물을 바꾸면 골라 둔 증거를 지운다 (다른 인물에게 잘못 제시되지 않게)
-  const [pickedFor, setPickedFor] = useState(npcId)
-  if (pickedFor !== npcId) {
-    setPickedFor(npcId)
-    setPicked(null)
-  }
+  const pickedFor = useRef(npcId)
+  useEffect(() => {
+    // 처음 인물이 정해질 때(화면 진입)는 비우지 않는다: 증거 화면 「이 증거로 질문」으로 붙인 칩 유지
+    if (pickedFor.current && pickedFor.current !== npcId) clearDraft()
+    pickedFor.current = npcId
+  }, [npcId, clearDraft])
 
   // 다른 인물과의 대화 여부를 미리 불러옵니다.
   useEffect(() => {
@@ -240,6 +291,14 @@ export default function Chat() {
     [npcId],
   )
 
+  // 통합 화면에서 인물이 없거나 아직 못 만나는 인물이면, 주소 이동 대신 마지막(또는 첫) 인물을 Play에 알린다
+  const roomInvalid = !npcId || !npc || (!!session && !unlocked.includes(npcId))
+  useEffect(() => {
+    if (embedded && session && roomInvalid) onNpcSelect?.(lastRoom())
+  }, [embedded, session, roomInvalid])
+
+  if (embedded && roomInvalid) return <Shell embedded />
+
   if (!npcId) {
     return session ? (
       <Navigate
@@ -290,7 +349,8 @@ export default function Chat() {
     const question = text.trim()
 
     if (
-      (!question && !picked) ||
+      (!question && !draft.length) ||
+      overServer ||
       question.length > MAX_MESSAGE_LENGTH ||
       busy ||
       !session
@@ -299,88 +359,65 @@ export default function Chat() {
     }
 
     setText('')
-    if (picked) {
-      setPicked(null)
-      void present(npcId, picked, evidence[picked]?.title ?? picked, question || undefined)
+    if (draft.length) {
+      clearDraft()
+      void present(npcId, draft, draft.map((id) => evidence[id]?.title ?? id).join(' · '), question || undefined)
     } else {
       void send(npcId, question)
     }
   }
 
   return (
-    <div className={styles.page} style={{ backgroundImage: `linear-gradient(rgba(10,9,8,.6), rgba(10,9,8,.8)), url(${MEETING_BG})` }}>
-      <TopNav />
-      <Toasts />
-      <Objective />
+    <div className={`${styles.page} ${embedded ? styles.embedded : ''}`} style={{ backgroundImage: embedded ? `linear-gradient(rgba(10,9,8,.2), rgba(10,9,8,.5)), url(${MEETING_BG})` : `linear-gradient(rgba(10,9,8,.6), rgba(10,9,8,.8)), url(${MEETING_BG})` }}>
+      {!embedded && <TopNav />}
+      <ConsentModal open={consentOpen} busy={consentBusy} error={consentError} onAgree={() => void agreeConsent()} onDecline={declineConsent} />
+      {!embedded && <><Toasts /><Objective /></>}
 
       {/* ======================================================
           인물 선택
           ====================================================== */}
 
       {/* data-tutorial: 튜토리얼이 가리킬 위치. 이름은 A와 맞춘다 (interview-*) */}
-      <ul
+      {/* 통합 화면에서는 A의 왼쪽 칸이 면담 대상을 보여 주므로 숨긴다 */}
+      {!embedded && <ul
         className={styles.row}
         aria-label="인물 선택"
         data-tutorial="interview-npc-list"
       >
-        {NPC_PUBLIC.map((n) => {
-          const open = unlocked.includes(n.id)
+        {/* 지금 만날 수 있는 인물만 보여 준다 (잠긴 인물은 이름·자리 모두 숨김) */}
+        {NPC_PUBLIC.filter((n) => unlocked.includes(n.id)).map((n) => {
           const active = n.id === npcId
 
           return (
             <li key={n.id}>
               <button
                 type="button"
-                disabled={!open || busy}
-                className={[
-                  styles.polaroid,
-                  active ? styles.current : '',
-                  open ? '' : styles.locked,
-                ].join(' ')}
-                onClick={() =>
-                  navigate({
-                    pathname: `/chat/${n.id}`,
-                    search,
-                  })
-                }
+                disabled={busy}
+                className={`${styles.polaroid} ${active ? styles.current : ''}`}
+                onClick={() => selectNpc(n.id)}
                 aria-current={active}
-                aria-label={
-                  open
-                    ? n.name
-                    : '아직 만날 수 없는 인물'
-                }
+                aria-label={n.name}
               >
                 <span className={styles.photo}>
-                  {open ? (
-                    <CharacterPortrait id={n.id} alt="" />
-                  ) : (
-                    <Lock size={20} />
+                  <CharacterPortrait id={n.id} alt="" />
+                  {(allMessages[n.id]?.length ?? 0) > 0 && (
+                    <i className={styles.talked} aria-label="이전 대화 있음" />
                   )}
-
-                  {open &&
-                    (allMessages[n.id]?.length ?? 0) > 0 && (
-                      <i
-                        className={styles.talked}
-                        aria-label="이전 대화 있음"
-                      />
-                    )}
                 </span>
 
-                <span className={styles.cap}>
-                  {open ? n.name : '???'}
-                </span>
+                <span className={styles.cap}>{n.name}</span>
               </button>
             </li>
           )
         })}
-      </ul>
+      </ul>}
 
       <main className={styles.main}>
         {/* ==================================================
             NPC 프로필
             ================================================== */}
 
-        <aside className={styles.profile} data-tutorial="interview-profile">
+        <aside className={styles.profile} data-tutorial="interview-profile" style={embedded ? { backgroundImage: `url(${MEETING_BG})` } : undefined}>
           <div className={styles.frame}>
             <span
               className={styles.tape}
@@ -403,23 +440,6 @@ export default function Chat() {
             <p className={styles.role}>
               {npc.title}
             </p>
-
-            <dl>
-              <div>
-                <dt>나이대</dt>
-                <dd>{npc.age}</dd>
-              </div>
-
-              <div>
-                <dt>외형</dt>
-                <dd>{npc.look}</dd>
-              </div>
-
-              <div>
-                <dt>말투</dt>
-                <dd>{npc.tone}</dd>
-              </div>
-            </dl>
           </div>
         </aside>
 
@@ -439,7 +459,11 @@ export default function Chat() {
 
             <span>{npc.title}</span>
 
-            <em>
+            {embedded ? (
+              <button type="button" className={styles.latest} onClick={() => listRef.current?.scrollTo({ top: listRef.current.scrollHeight })}>
+                최신 대사
+              </button>
+            ) : <em>
               {messages.length > 0
                 ? `이전 대화 ${
                     messages.filter(
@@ -448,7 +472,7 @@ export default function Chat() {
                     ).length
                   }회`
                 : '첫 대화'}
-            </em>
+            </em>}
           </header>
 
           {/* 증거 확보 안내 */}
@@ -521,7 +545,7 @@ export default function Chat() {
                 </p>
               )}
 
-            {messages.map((message) => (
+            {messages.map((message, i) => (
               <div
                 key={message.id}
                 className={[
@@ -529,6 +553,7 @@ export default function Chat() {
                   message.role === 'player'
                     ? styles.me
                     : styles.them,
+                  i === lastNpcIdx ? styles.latestMsg : '',
                 ].join(' ')}
               >
                 {message.role === 'npc' && (
@@ -540,24 +565,33 @@ export default function Chat() {
                 )}
 
                 <div className={styles.bubbleWrap}>
-                  {message.role === 'npc' && (
+                  {(message.role === 'npc' || embedded) && (
                     <span className={styles.who}>
-                      {npc.name}
+                      {message.role === 'npc' ? npc.name : '수사관'}
                     </span>
                   )}
 
                   <p className={styles.bubble}>
-                    {message.text}
+                    {/* 방금 도착한 인물 답변(id가 t로 시작)만 한 번 타이핑 효과 */}
+                    {message.role === 'npc' && message.id.startsWith('t') && !typed.has(message) ? (
+                      <TypingText
+                        text={message.text}
+                        onTick={() => { const el = listRef.current; if (el) el.scrollTop = el.scrollHeight }}
+                        onDone={() => typed.add(message)}
+                      />
+                    ) : message.text}
                   </p>
                   {message.role === 'npc' && (
                     <button
                       type="button"
-                      className={styles.saveBtn}
+                      className={embedded ? styles.pin : styles.saveBtn}
                       data-tutorial="interview-save-statement"
                       aria-pressed={savedIds.has(`${npc.id}:${message.text}`)}
+                      aria-label={savedIds.has(`${npc.id}:${message.text}`) ? '진술 저장 취소' : '진술 저장'}
+                      title={embedded ? (savedIds.has(`${npc.id}:${message.text}`) ? '저장 취소' : '진술 저장') : undefined}
                       onClick={() => toggleStatement({ id: `${npc.id}:${message.text}`, npcId: npc.id, text: message.text })}
                     >
-                      {savedIds.has(`${npc.id}:${message.text}`) ? '저장됨 ✓' : '진술 저장'}
+                      {embedded ? <Pin size={15} /> : savedIds.has(`${npc.id}:${message.text}`) ? '저장됨 ✓' : '진술 저장'}
                     </button>
                   )}
                 </div>
@@ -631,13 +665,17 @@ export default function Chat() {
                 <button type="button" onClick={() => setHint(null)} aria-label="힌트 닫기"><X size={14} /></button>
               </p>
             )}
-            {picked && (
-              <p className={styles.picked} data-tutorial="interview-picked">
+            {draft.length > 0 && (
+              <div className={styles.picked} data-tutorial="interview-picked">
                 <FileSearch size={14} />
-                제시할 증거: <b>{evidence[picked]?.title ?? picked}</b>
-                <span>질문을 함께 적거나 그대로 보내세요.</span>
-                <button type="button" onClick={() => setPicked(null)} aria-label="제시할 증거 취소"><X size={14} /></button>
-              </p>
+                {draft.map((id) => (
+                  <span key={id} className={styles.chip}>
+                    {evidence[id]?.title ?? id}
+                    <button type="button" onClick={() => removeDraft(id)} aria-label={`${evidence[id]?.title ?? id} 빼기`}><X size={12} /></button>
+                  </span>
+                ))}
+                <span>{overServer ? '두 증거 함께 제시는 서버 준비 중입니다. 하나를 빼 주세요.' : '질문을 함께 적거나 그대로 보내세요.'}</span>
+              </div>
             )}
             <button
               type="button"
@@ -650,7 +688,8 @@ export default function Chat() {
               증거 제시
             </button>
 
-            <button
+            {/* 통합 화면에서는 노트·힌트를 A의 상단·오른쪽 칸에서 연다 */}
+            {!embedded && <><button
               type="button"
               className="btn"
               onClick={() =>
@@ -671,16 +710,17 @@ export default function Chat() {
             >
               <Lightbulb size={16} />
               {hintBusy ? '힌트 찾는 중…' : '힌트'}
-            </button>
+            </button></>}
 
             {/* Issue #59: 최대 200자 입력창 */}
 
+            <div className={styles.inputRow}>
             <div className={styles.messageField} data-tutorial="interview-input">
               <textarea
                 value={text}
                 rows={1}
                 maxLength={MAX_MESSAGE_LENGTH}
-                placeholder={`${npc.name}에게 질문하기 (Enter 전송 · Shift+Enter 줄바꿈)`}
+                placeholder={embedded ? `${npc.name}에게 질문하기 (Enter 전송)` : `${npc.name}에게 질문하기 (Enter 전송 · Shift+Enter 줄바꿈)`}
                 onChange={(event) =>
                   handleTextChange(event.target.value)
                 }
@@ -713,16 +753,19 @@ export default function Chat() {
 
             <button
               type="submit"
-              className={styles.send}
+              className={`${styles.send} ${draft.length ? styles.sendPresent : ''}`}
               disabled={
                 busy ||
-                (!text.trim() && !picked) ||
+                (!text.trim() && !draft.length) ||
+                overServer ||
                 text.length > MAX_MESSAGE_LENGTH
               }
-              aria-label="보내기"
+              aria-label={draft.length ? `${npc.name}에게 제시` : '보내기'}
             >
+              {draft.length > 0 && <span>{npc.name}에게 제시</span>}
               <Send size={18} />
             </button>
+            </div>
           </form>
         </section>
       </main>
@@ -738,10 +781,10 @@ export default function Chat() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            onClick={() => setPickOpen(false)}
+            onClick={closePick}
           >
             <motion.div
-              className={styles.modal}
+              className={`${styles.modal} ${sideBySide ? styles.modalWide : ''}`}
               role="dialog"
               aria-label="증거 제시"
               initial={{
@@ -767,38 +810,53 @@ export default function Chat() {
 
                 <button
                   type="button"
-                  onClick={() => setPickOpen(false)}
+                  onClick={closePick}
                   aria-label="닫기"
                 >
                   <X size={18} />
                 </button>
               </header>
 
-              {found.length === 0 ? (
+              {sideBySide ? (
+                <>
+                  <EvidenceCompare ids={draft} />
+                  <footer className={styles.modalFoot}>
+                    <button type="button" className="btn" onClick={() => setSideBySide(false)}>목록으로</button>
+                    <button type="button" className="btn btn--primary" onClick={closePick}>제시</button>
+                  </footer>
+                </>
+              ) : found.length === 0 ? (
                 <p className={styles.none}>
                   아직 확보한 증거가 없습니다.
                   인물들에게 질문하며 단서를 찾아보세요.
                 </p>
               ) : (
-                <ul>
-                  {found.map((id) => (
-                    <li key={id}>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setPickOpen(false)
-                          setPicked(id)
-                        }}
-                      >
-                        <FileSearch size={16} />
-
-                        <span>
-                          {evidence[id]?.title ?? id}
-                        </span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
+                <>
+                  <p className={styles.none} aria-live="polite">한 번에 최대 {MAX_DRAFT}개까지 고를 수 있습니다 · {draft.length} / {MAX_DRAFT}</p>
+                  <ul>
+                    {found.map((id) => {
+                      const on = draft.includes(id)
+                      return (
+                        <li key={id}>
+                          <button
+                            type="button"
+                            aria-pressed={on}
+                            disabled={!on && draft.length >= MAX_DRAFT}
+                            onClick={() => (on ? removeDraft(id) : addDraft(id))}
+                          >
+                            <FileSearch size={16} />
+                            <span>{evidence[id]?.title ?? id}</span>
+                            {on && <i className={styles.pickNo}>{draft.indexOf(id) + 1}</i>}
+                          </button>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                  <footer className={styles.modalFoot}>
+                    <button type="button" className="btn" disabled={draft.length < 2} title={draft.length < 2 ? '증거 2개를 고르면 나란히 볼 수 있습니다.' : undefined} onClick={() => { draft.forEach((id) => void loadEvidence(id)); setSideBySide(true) }}>나란히 보기</button>
+                    <button type="button" className="btn btn--primary" disabled={!draft.length} onClick={closePick}>제시</button>
+                  </footer>
+                </>
               )}
             </motion.div>
           </motion.div>
@@ -808,10 +866,10 @@ export default function Chat() {
   )
 }
 
-function Shell() {
+function Shell({ embedded = false }: { embedded?: boolean }) {
   return (
-    <div className={styles.page}>
-      <TopNav />
+    <div className={`${styles.page} ${embedded ? styles.embedded : ''}`}>
+      {!embedded && <TopNav />}
     </div>
   )
 }

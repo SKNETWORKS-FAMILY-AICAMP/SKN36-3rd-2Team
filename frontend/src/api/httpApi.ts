@@ -38,6 +38,8 @@ interface BackendGameState {
   outcome: string | null
   revision: number
   currentChapter?: string
+  e30ConsentAvailable?: boolean
+  e30ConsentGranted?: boolean
   events: BackendEvent[]
 }
 
@@ -117,6 +119,9 @@ interface BackendAccuseResponse {
 const BASE = import.meta.env.VITE_API_BASE_URL ?? '/api'
 
 const TIMEOUT_MS = 15_000
+
+/** 서버가 한 번에 받는 제시 증거 수. 서버가 evidenceIds[]를 받으면 2로 올린다 */
+export const SERVER_PRESENT_MAX = 1
 
 const CHAT_TIMEOUT_MS =
   Number(import.meta.env.VITE_CHAT_TIMEOUT_MS) || 90_000
@@ -239,6 +244,8 @@ function toSessionState(
     revision: game.revision,
     evidenceTotal,
     currentChapter: game.currentChapter,
+    consentAvailable: game.e30ConsentAvailable ?? false,
+    consentGranted: game.e30ConsentGranted ?? false,
   }
 }
 
@@ -458,9 +465,12 @@ export const httpApi: GameApi = {
   presentEvidence: async (
     sessionId: string,
     npcId: string,
-    evidenceId: string,
+    evidenceIds: string[],
     question = '이 증거에 대해 설명해 주세요.',
   ): Promise<ChatReply> => withSessionChatLock(sessionId, async () => {
+    // 서버는 아직 증거 1개(presentedEvidenceId)만 받는다. evidenceIds[]가 생기면 여기서 배열로 보낸다
+    if (!evidenceIds.length || evidenceIds.length > SERVER_PRESENT_MAX) throw new Error('두 증거를 함께 제시하는 기능은 서버 준비 중입니다.')
+    const [evidenceId] = evidenceIds
     await ensureNpcSelected(sessionId, npcId)
     const response = await request<BackendChatReply>(
       `${gamePath(sessionId)}/chat`,
@@ -594,6 +604,13 @@ export const httpApi: GameApi = {
     await request(`${path}/give-up`, post({ expectedRevision: game.revision }))
     const ending = await request<EndingDetails>(`${path}/ending`)
     return endingToResponse(ending, game.attemptsLeft)
+  },
+
+  // 민감 기록 열람 동의. 서버가 조건·권한을 확인하고, 409면 호출한 쪽에서 상태를 다시 읽는다
+  giveConsent: async (sessionId: string): Promise<void> => {
+    const path = gamePath(sessionId)
+    const game = await request<BackendGameState>(path)
+    await request(`${path}/consent`, post({ expectedRevision: game.revision, consent: true }))
   },
 
   // 엔딩 이미지 (게임 종료 후에만). 서버가 확정한 엔딩의 이미지만 순서대로 준다. url은 /api부터 시작하는 경로라 API 서버 주소와 합친다.

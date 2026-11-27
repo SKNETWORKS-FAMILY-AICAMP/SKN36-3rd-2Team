@@ -19,6 +19,7 @@ import {
 
 import { useGameStore } from '../../store/gameStore'
 import styles from './Relations.module.css'
+import type { EmbedProps } from '../embed'
 
 // 피해자 정보
 const VICTIM_ID = 'V01' as const
@@ -27,8 +28,6 @@ const VICTIM = {
   id: VICTIM_ID,
   name: '신기범',
   title: '사건 피해자',
-  age: '',
-  look: '',
 }
 
 // 모든 관계도 좌표를 한곳에서 관리합니다.
@@ -55,7 +54,7 @@ type SelectedId = CharacterId | typeof VICTIM_ID
 const hasBoardPosition = (id: string): boolean =>
   Object.prototype.hasOwnProperty.call(BOARD_COORDS, id)
 
-export default function Relations() {
+export default function Relations({ embedded = false, onNpcSelect }: EmbedProps = {}) {
   const navigate = useNavigate()
 
   const session = useGameStore((s) => s.session)
@@ -175,9 +174,8 @@ export default function Relations() {
 
 
   return (
-    <div className={styles.page}>
-      <TopNav />
-      <Toasts />
+    <div className={`${styles.page} ${embedded ? styles.embedded : ''}`}>
+      {!embedded && <><TopNav /><Toasts /></>}
 
       <main className={styles.main}>
         <section
@@ -421,22 +419,6 @@ export default function Relations() {
                 {picked.title}
               </p>
 
-              <dl>
-                {picked.age && (
-                  <div>
-                    <dt>나이대</dt>
-                    <dd>{picked.age}</dd>
-                  </div>
-                )}
-
-                {picked.look && (
-                  <div>
-                    <dt>외형</dt>
-                    <dd>{picked.look}</dd>
-                  </div>
-                )}
-              </dl>
-
               <h3>확인된 관계</h3>
 
               <ul className={styles.list}>
@@ -477,7 +459,7 @@ export default function Relations() {
                     type="button"
                     className={styles.talk}
                     onClick={() =>
-                      navigate(`/chat/${picked.id}`)
+                      onNpcSelect ? onNpcSelect(picked.id) : navigate(`/chat/${picked.id}`)
                     }
                   >
                     <MessageCircle size={16} />

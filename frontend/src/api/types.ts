@@ -32,6 +32,9 @@ export interface SessionState {
   evidenceTotal?: number
   /** 서버 현재 챕터(CH00~CH04). 재구성은 CH04에서만 열린다 */
   currentChapter?: string
+  /** 민감 기록 열람 동의를 지금 요청할 수 있는지 / 이미 동의했는지 (서버 판단). 동의만으로 기록이 열리지는 않는다 */
+  consentAvailable?: boolean
+  consentGranted?: boolean
 }
 
 /** 사건 재구성 항목: 동기·접근·시간·은폐. 항목마다 보유 증거 2~3개, 3항목 이상 제출 */

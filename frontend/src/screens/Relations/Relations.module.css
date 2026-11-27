@@ -26,10 +26,6 @@
 .big { width: 100%; aspect-ratio: 1; object-fit: cover; object-position: top; border: 6px solid var(--paper-200); border-bottom-width: 22px; box-shadow: var(--shadow-deep); transform: rotate(-1deg); }
 .card h2 { font-size: 24px; color: var(--paper-100); margin-top: 18px; letter-spacing: .05em; }
 .role { color: var(--brass-400); font-size: 14px; margin-bottom: 12px; }
-.card dl { margin: 0 0 14px; display: grid; gap: 6px; }
-.card dl div { display: grid; grid-template-columns: 54px 1fr; font-size: 14px; gap: 8px; }
-.card dt { color: var(--paper-400); }
-.card dd { margin: 0; }
 .card h3 { font-size: 13px; color: var(--paper-400); font-weight: 400; margin-bottom: 6px; }
 .list { margin: 0 0 18px; padding-left: 18px; font-size: 14px; }
 .none { list-style: none; margin-left: -18px; color: var(--paper-400); }
@@ -51,3 +47,6 @@
 .dot { width: 14px; height: 14px; padding: 0; border-radius: 50%; background: var(--blood-400); }
 .dimTag { opacity: .35; }
 .pin { z-index: 1; }
+
+/* /play 통합 화면 안에서는 부모 칸 높이에 맞춘다 */
+.embedded { height: 100%; min-height: 0; }

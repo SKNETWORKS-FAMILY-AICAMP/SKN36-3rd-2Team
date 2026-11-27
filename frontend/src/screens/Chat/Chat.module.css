@@ -9,8 +9,6 @@ li:nth-child(even) .polaroid { transform: rotate(1.4deg); }
 .photo img { width: 100%; height: 100%; object-fit: cover; object-position: top; filter: sepia(.25) contrast(1.05); }
 .cap { font-family: var(--font-serif); font-size: 12px; color: var(--ink-800); white-space: nowrap; }
 .current { outline: 2px solid var(--brass-400); outline-offset: 3px; }
-.locked { cursor: default; filter: grayscale(1) brightness(.45); }
-.locked .photo { background: #0b0a09; }
 
 .main { flex: 1; min-height: 0; display: grid; grid-template-columns: 40% 60%; }
 
@@ -22,10 +20,6 @@ li:nth-child(even) .polaroid { transform: rotate(1.4deg); }
 .info { width: min(100%, 360px); }
 .info h2 { font-size: 28px; color: var(--paper-100); letter-spacing: .06em; }
 .role { color: var(--brass-400); font-size: 14px; margin: 2px 0 12px; }
-.info dl { margin: 0; display: grid; gap: 8px; }
-.info dl div { display: grid; grid-template-columns: 56px 1fr; gap: 10px; font-size: 14px; }
-.info dt { color: var(--paper-400); }
-.info dd { margin: 0; color: var(--paper-200); }
 
 /* 우측 메신저 */
 .chat { display: flex; flex-direction: column; min-height: 0; background: transparent; }
@@ -73,7 +67,6 @@ li:nth-child(even) .polaroid { transform: rotate(1.4deg); }
   .frame { width: 96px; padding: 6px 6px 12px; flex: none; }
   .tape { display: none; }
   .info h2 { font-size: 20px; }
-  .info dl { display: none; }
   .role { margin-bottom: 0; }
   .row { padding: 10px 14px; }
   .list { padding: 16px; }
@@ -98,9 +91,11 @@ li:nth-child(even) .polaroid { transform: rotate(1.4deg); }
 
 /* Issue #59 — NPC 메시지 200자 제한 */
 
+.inputRow { flex: 1 1 100%; display: flex; align-items: flex-end; gap: 8px; } /* 버튼 줄 아래에 입력창+보내기를 항상 한 줄로 */
+
 .messageField {
   position: relative;
-  flex: 1 1 calc(100% - 52px); /* 버튼 줄 아래에 입력창+보내기 버튼을 한 줄로 */
+  flex: 1 1 auto;
   min-width: 0;
 }
 
@@ -142,3 +137,52 @@ li:nth-child(even) .polaroid { transform: rotate(1.4deg); }
 /* 힌트 1단계 (제시할 증거 표시와 같은 모양, 색만 다르게) */
 .hintBox { border-left-color: var(--paper-300); }
 .picked .hintText { color: var(--paper-100); line-height: 1.6; }
+
+/* /play 통합 화면(공유 목업): 인물 패널 34% + 대화 카드 */
+.embedded { height: 100%; min-height: 0; border-radius: 12px; }
+.embedded .main { grid-template-columns: minmax(150px, 34%) 1fr; gap: 12px; }
+.embedded .profile { position: relative; padding: 0; border: 1px solid var(--ink-700); border-radius: 12px; background: #171514 center top / cover no-repeat; overflow: hidden; }
+/* 면담실 조명: 위에서 내려오는 램프 빛 + 가장자리 어둡게 */
+.embedded .profile::after { content: ''; position: absolute; inset: 0; pointer-events: none; background: radial-gradient(ellipse 60% 40% at 50% 18%, rgba(255,196,120,.16), transparent 70%), radial-gradient(ellipse at 50% 55%, transparent 45%, rgba(0,0,0,.7)); }
+.embedded .frame { position: absolute; inset: 0; width: auto; padding: 0; background: none; box-shadow: none; transform: none; display: flex; align-items: flex-end; }
+.embedded .tape, .embedded .info, .embedded .avatar { display: none; }
+/* 사진 경계를 흐려 방과 섞고, 낮은 조명 색감으로 */
+.embedded .portrait { width: 100%; height: auto; max-height: 100%; aspect-ratio: auto; object-fit: contain; object-position: center bottom; background: none; filter: sepia(.3) saturate(.8) brightness(.82) contrast(1.08); -webkit-mask-image: linear-gradient(to bottom, transparent, #000 9%), linear-gradient(to right, transparent, #000 14%, #000 86%, transparent); -webkit-mask-composite: source-in; mask-image: linear-gradient(to bottom, transparent, #000 9%), linear-gradient(to right, transparent, #000 14%, #000 86%, transparent); mask-composite: intersect; }
+.embedded .chat { min-width: 0; padding: 12px; border: 1px solid var(--ink-700); border-radius: 12px; background: rgba(24,22,21,.55); backdrop-filter: blur(3px); }
+.embedded .chatHead { justify-content: space-between; padding: 0 0 8px; background: none; }
+.embedded .chatHead span { display: none; }
+.latest { padding: 4px 10px; font: inherit; font-size: 12px; color: var(--paper-200); background: #211d19; border: 1px solid var(--brass-500); border-radius: 9px; cursor: pointer; }
+.latest:hover { background: #423322; }
+.embedded .list { padding: 0; gap: 6px; }
+.embedded .msg, .embedded .me { justify-content: flex-start; padding: 10px; background: rgba(37,33,29,.72); border-radius: 5px; }
+.embedded .msg { position: relative; }
+/* 수사관 질문은 배경 없이 */
+.embedded .me { background: transparent; }
+/* 진술 저장 핀: 평소 숨김, 마우스·키보드가 올라오거나 저장된 것만 표시 (터치 화면은 항상) */
+.pin { position: absolute; top: 6px; right: 8px; width: 28px; height: 28px; display: grid; place-items: center; padding: 0; color: var(--paper-400); background: none; border: 0; border-radius: 6px; cursor: pointer; opacity: 0; transition: opacity .15s; }
+.msg:hover .pin, .pin:focus-visible, .pin[aria-pressed='true'] { opacity: 1; }
+.pin:hover { color: var(--paper-100); background: rgba(255,255,255,.06); }
+.pin[aria-pressed='true'] { color: var(--brass-400); background: rgba(198,164,115,.16); }
+@media (hover: none) { .pin { opacity: 1; } }
+.embedded .latestMsg { border-left: 2px solid var(--brass-400); background: rgba(53,41,30,.85); }
+.embedded .bubbleWrap { max-width: 100%; }
+.embedded .who { font-weight: 700; color: var(--brass-400); }
+.embedded .bubble, .embedded .them .bubble, .embedded .me .bubble { padding: 0; color: var(--paper-100); background: none; border-radius: 0; }
+.embedded .collectPanel { padding: 8px 0; background: none; }
+.embedded .composer { padding: 10px 0 0; background: none; }
+@media (max-width: 560px) {
+  .embedded .main { grid-template-columns: 1fr; grid-template-rows: 150px 1fr; }
+}
+
+/* 제시할 증거 칩(최대 2개) */
+.chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 8px; color: var(--brass-400); font-weight: 600; background: rgba(198,164,115,.12); border: 1px solid var(--brass-700); border-radius: 12px; }
+.picked .chip button { margin-left: 0; }
+.picked > span:last-child { margin-left: 4px; }
+.sendPresent { width: auto; padding: 0 12px; display: flex; gap: 6px; font: inherit; font-size: 13px; font-weight: 600; white-space: nowrap; }
+/* 증거 고르기 창: 고른 순서 번호, 2개 찬 뒤 나머지는 흐리게 */
+.modal li button[aria-pressed='true'] { border-color: var(--brass-400); background: rgba(198,164,115,.12); }
+.modal li button:disabled { opacity: .45; cursor: default; }
+.pickNo { margin-left: auto; width: 20px; height: 20px; display: grid; place-items: center; font-style: normal; font-size: 12px; color: var(--ink-950); background: var(--brass-400); border-radius: 50%; }
+.modal .none { margin: 0 0 10px; font-size: 13px; }
+.modalFoot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.modalWide { width: min(980px, 100%); max-height: 90vh; overflow-y: auto; }

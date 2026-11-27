@@ -11,19 +11,28 @@ interface ChatStore {
   typing: string | null
   error: string | null
   canRetry: boolean
+  /** 입력창 위에 붙인 제시할 증거(최대 2개). 면담 화면·증거 화면이 함께 쓴다 */
+  draft: string[]
 
   clear: () => void
+  /** 증거를 칩으로 붙인다. 이미 있거나 2개가 차 있으면 false */
+  addDraft: (evidenceId: string) => boolean
+  removeDraft: (evidenceId: string) => void
+  clearDraft: () => void
   load: (npcId: string) => Promise<void>
   send: (npcId: string, text: string) => Promise<void>
   present: (
     npcId: string,
-    evidenceId: string,
+    evidenceIds: string[],
     title: string,
     /** 증거와 함께 보낼 질문. 없으면 기본 질문 */
     question?: string,
   ) => Promise<void>
   retry: () => Promise<void>
 }
+
+/** 동시 제시 상한(문서 결정) */
+export const MAX_DRAFT = 2
 
 let tmp = 0
 let inFlight = false
@@ -203,6 +212,20 @@ export const useChatStore = create<ChatStore>((set, get) => {
     typing: null,
     error: null,
     canRetry: false,
+    draft: [],
+
+    addDraft(id) {
+      const { draft } = get()
+      if (draft.includes(id) || draft.length >= MAX_DRAFT) return false
+      set({ draft: [...draft, id] })
+      return true
+    },
+    removeDraft(id) {
+      set({ draft: get().draft.filter((x) => x !== id) })
+    },
+    clearDraft() {
+      set({ draft: [] })
+    },
 
     // 새 게임 시작 시 이전 게임의 모든 채팅 상태를 초기화합니다.
     clear() {
@@ -220,6 +243,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
         typing: null,
         error: null,
         canRetry: false,
+        draft: [],
       })
     },
 
@@ -279,11 +303,11 @@ export const useChatStore = create<ChatStore>((set, get) => {
         (sid) => api.sendMessage(sid, npcId, text),
       ),
 
-    present: (npcId, evidenceId, title, question) =>
+    present: (npcId, evidenceIds, title, question) =>
       run(
         npcId,
         question ? `[증거 제시] ${title}\n${question}` : `[증거 제시] ${title}`,
-        (sid) => api.presentEvidence(sid, npcId, evidenceId, question),
+        (sid) => api.presentEvidence(sid, npcId, evidenceIds, question),
       ),
   }
 })

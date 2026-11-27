@@ -8,10 +8,10 @@
 .sidebar { border-right: 1px solid #3b3029; }
 .tools { border-left: 1px solid #3b3029; }
 .sidebar h3,.tools h3 { margin: 10px 0; font-size: 13px; color: #c6a473; }
-.page button:not(.embeddedPanel button) { padding: 9px 13px; background: #211d19; color: inherit; border: 1px solid #80633d; border-radius: 9px; cursor: pointer; }
-.page button:not(.embeddedPanel button):hover:not(:disabled),.page .active { background: #493827; border-color: #c6a473; }
-.page button:not(.embeddedPanel button):focus-visible { outline: 2px solid #f0d9a8; outline-offset: 2px; }
-.page button:not(.embeddedPanel button):disabled { opacity: .45; cursor: default; }
+.page button:not(.embeddedPanel button, .dockedNotes button) { padding: 9px 13px; background: #211d19; color: inherit; border: 1px solid #80633d; border-radius: 9px; cursor: pointer; }
+.page button:not(.embeddedPanel button, .dockedNotes button):hover:not(:disabled),.page .active { background: #493827; border-color: #c6a473; }
+.page button:not(.embeddedPanel button, .dockedNotes button):focus-visible { outline: 2px solid #f0d9a8; outline-offset: 2px; }
+.page button:not(.embeddedPanel button, .dockedNotes button):disabled { opacity: .45; cursor: default; }
 .sidebar button,.tools button { display: block; width: 100%; margin: 7px 0; text-align: left; font-size: 13px; }
 .sidebar button small { display: block; font-size: 10px; margin-top: 3px; color: #a29b90; }
 .main { min-width: 0; display: flex; flex-direction: column; gap: 10px; padding: 14px; }
@@ -108,4 +108,15 @@
   .interviewPanel { height: max(460px, 72dvh); }
   .toolPanel { height: 65dvh; }
   .interviewList { max-height: 32dvh; }
+}
+
+/* STEP 12-5: 노트는 Play의 독립 열로 열고, 닫으면 기존 3열로 복원합니다. */
+.dockedNotes { min-width: 0; min-height: 0; }
+@media (min-width: 1051px) {
+  .layout.notesOpen {
+    grid-template-columns: 218px minmax(0, 1fr) 168px clamp(320px, var(--play-note-width, 560px), 40vw);
+  }
+}
+@media (max-width: 1050px) {
+  .dockedNotes { grid-column: 1 / -1; }
 }

@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode, type CSSProperties } from 'react'
 import { useNavigate } from 'react-router-dom'
 import GameHelp from '../../components/GameHelp'
 import FieldTutorial, { isInterviewTutorial, nextInterviewTutorial, type FieldTutorialStep } from '../../components/FieldTutorial'
 import Toasts from '../../components/Toasts'
+import NotesPanel from '../../components/NotesPanel'
 import { api } from '../../api/client'
 import { ApiHttpError } from '../../api/httpApi'
 import { investigate } from '../../api/investigationApi'
@@ -15,6 +16,7 @@ import { useChatStore } from '../../store/chatStore'
 import Chat from '../Chat/Chat'
 import Evidence from '../Evidence/Evidence'
 import Relations from '../Relations/Relations'
+import { onPlayOpen } from '../embed'
 import styles from './Play.module.css'
 
 function Panel({ title, kind, children, onClose }: { title: string; kind: Modal['kind']; children: ReactNode; onClose: () => void }) {
@@ -45,6 +47,7 @@ export default function Play() {
   const restoreAttempt = useRef<{ retry: number; promise: Promise<void> } | null>(null)
   const setPanel = useNoteStore((s) => s.setPanel)
   const notePanelOpen = useNoteStore((s) => s.panelOpen)
+  const notePanelWidth = useNoteStore((s) => s.panelWidth)
   const [placeId, setPlaceId] = useState('lobby')
   const [npcId, setNpcId] = useState<string | undefined>(undefined)
   const [subviewId, setSubviewId] = useState<string | null>(null)
@@ -186,6 +189,13 @@ export default function Play() {
     if (tutorialStep !== null && !isInterviewTutorial(tutorialStep)) startInterviewTutorial()
   }
 
+  // 통합 화면의 알림은 주소를 변경하지 않고 Play 내부에서 처리합니다.
+  useEffect(() => onPlayOpen((target) => {
+    if (phase !== 'INVESTIGATION' || fieldLock.current) return
+    if (target.kind === 'evidence') setModal({ kind: 'evidence' })
+    else selectNpc(target.npcId)
+  }), [phase, selectNpc])
+
   const selectPlace = (id: string) => {
     if (id === 'interview') {
       if (canInterview) {
@@ -306,7 +316,7 @@ export default function Play() {
         </div>
       </header>
       {tutorialStep && !modal && !helpOpen && !notePanelOpen && (isInterviewTutorial(tutorialStep) === inInterview) && <FieldTutorial step={tutorialStep} onSkip={finishFieldTutorial} onNext={advanceInterviewTutorial} /> }
-      <div className={styles.layout}>
+      <div className={`${styles.layout} ${notePanelOpen ? styles.notesOpen : ''}`} style={{ '--play-note-width': `${notePanelWidth}px` } as CSSProperties}>
         <aside className={styles.sidebar} data-tutorial="field-place-list">
           <h3>조사 장소</h3>
           {availablePlaces.map((p) => (
@@ -359,13 +369,14 @@ export default function Play() {
           <h3>수사 도구</h3>
           <button type="button" data-tutorial="field-evidence" disabled={phase !== 'INVESTIGATION'} onClick={() => setModal({ kind: 'evidence' })}>증거함 · {session?.foundEvidence.length ?? 0}개</button>
           <button type="button" disabled={phase !== 'INVESTIGATION'} onClick={() => setModal({ kind: 'relations' })}>인물관계도</button>
-          <button type="button" data-tutorial="interview-notes" onClick={() => setPanel(true)}>수사 기록</button>
+          <button type="button" data-tutorial="interview-notes" aria-expanded={notePanelOpen} onClick={() => setPanel(!notePanelOpen)}>수사 기록</button>
         </nav>
+        {notePanelOpen && <div className={styles.dockedNotes}><NotesPanel docked /></div>}
       </div>
       <Toasts />
       <GameHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
       {modal && <Panel kind={modal.kind} title={modal.kind === 'map' ? '설계도 · 구 본관' : modal.kind === 'hint' ? '목표 · 힌트' : modal.kind === 'zoom' ? modal.hotspot.label : modal.kind === 'evidence' ? '증거함' : modal.kind === 'relations' ? '인물관계도' : modal.room.name} onClose={closePanel}>
-        {modal.kind === 'evidence' && <div className={`${styles.embeddedPanel} ${styles.toolPanel}`}><Evidence embedded onNpcSelect={selectNpc} /></div>}
+        {modal.kind === 'evidence' && <div className={`${styles.embeddedPanel} ${styles.toolPanel}`}><Evidence embedded onNpcSelect={selectNpc} onClose={closePanel} /></div>}
         {modal.kind === 'relations' && <div className={`${styles.embeddedPanel} ${styles.toolPanel}`}><Relations embedded onNpcSelect={selectNpc} /></div>}
         {modal.kind === 'map' && <>
           <div className={styles.plans}>

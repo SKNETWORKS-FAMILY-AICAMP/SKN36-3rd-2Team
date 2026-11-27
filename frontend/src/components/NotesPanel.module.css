@@ -7,3 +7,13 @@
 .grip::after { content: ''; position: absolute; left: 4px; top: 50%; width: 3px; height: 46px; margin-top: -23px; border-radius: 2px; background: var(--brass-700); opacity: .6; }
 .grip:hover::after, .grip:focus-visible::after { opacity: 1; background: var(--brass-400); }
 .grip:focus-visible { outline: none; }
+
+/* Play 내부에서만 사용하는 독립 열. 기존 고정 패널 스타일은 유지합니다. */
+.docked { position: relative; top: auto; right: auto; bottom: auto; z-index: auto; width: 100%; min-width: 0; height: max(420px, calc(100dvh - 75px)); min-height: 0; box-shadow: none; }
+.docked header { flex-shrink: 0; gap: 10px; }
+.docked header button { flex-shrink: 0; }
+.docked > div:not(.grip) { flex: 1 1 0; min-height: 0; min-width: 0; overflow-y: auto; overflow-x: hidden; }
+@media (max-width: 1050px) {
+  .docked { height: max(420px, 70dvh); border-left: 0; border-top: 1px solid var(--brass-700); }
+  .docked .grip { display: none; }
+}

@@ -720,7 +720,7 @@ export default function Chat({ embedded = false, npcId: npcProp, onNpcSelect }: 
                 value={text}
                 rows={1}
                 maxLength={MAX_MESSAGE_LENGTH}
-                placeholder={embedded ? `${npc.name}에게 질문하기 (Enter 전송)` : `${npc.name}에게 질문하기 (Enter 전송 · Shift+Enter 줄바꿈)`}
+                placeholder={embedded ? `${npc.name}에게 질문하기` : `${npc.name}에게 질문하기 (Enter 전송 · Shift+Enter 줄바꿈)`}
                 onChange={(event) =>
                   handleTextChange(event.target.value)
                 }

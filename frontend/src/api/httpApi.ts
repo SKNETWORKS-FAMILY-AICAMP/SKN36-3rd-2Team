@@ -306,7 +306,16 @@ async function ensureNpcSelected(
 ): Promise<void> {
   const path = gamePath(sessionId)
 
-  const game = await request<BackendGameState>(path)
+  let game = await request<BackendGameState>(path)
+
+  // 프롤로그가 완료되지 않은 경우 조사 단계로 전환
+  // 오프닝 종료 시 명시적 호출은 별도로 유지
+  if (game.phase === 'PROLOGUE') {
+    game = await request<BackendGameState>(
+      `${path}/prologue/complete`,
+      { method: 'POST' },
+    )
+  }
 
   if (game.phase !== 'INVESTIGATION') {
     throw new Error('현재 NPC와 대화할 수 없는 단계입니다.')

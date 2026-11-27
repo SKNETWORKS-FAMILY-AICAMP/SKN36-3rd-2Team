@@ -30,3 +30,9 @@
 
 .highlight:disabled { opacity: .85 !important; }
 .guide { box-sizing: border-box; }
+
+/* 면담 입력창과 오른쪽 수사 도구를 가리지 않도록 안내 위치를 분리합니다. */
+.interviewGuide { left: 18px; right: auto; }
+.guide button + button { margin-top: 6px; }
+.waiting { color: #c6a473; }
+.highlight[data-tutorial="interview-save-statement"] { opacity: 1; }

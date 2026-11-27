@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import GameHelp from '../../components/GameHelp'
-import FieldTutorial, { type FieldTutorialStep } from '../../components/FieldTutorial'
+import FieldTutorial, { isInterviewTutorial, nextInterviewTutorial, type FieldTutorialStep } from '../../components/FieldTutorial'
 import Toasts from '../../components/Toasts'
 import { api } from '../../api/client'
 import { ApiHttpError } from '../../api/httpApi'
@@ -10,6 +10,11 @@ import { getObjectives, objectiveLabel, objectiveStatusLabel, type ObjectiveItem
 import { useGameStore } from '../../store/gameStore'
 import { useNoteStore } from '../../store/noteStore'
 import { backgroundUrl, fieldPlaces, fieldSubviews, floorMaps, zoomUrl, type Hotspot, type MapRoom } from '../../data/fieldScenes'
+import { NPC_PUBLIC } from '../../data/characters'
+import { useChatStore } from '../../store/chatStore'
+import Chat from '../Chat/Chat'
+import Evidence from '../Evidence/Evidence'
+import Relations from '../Relations/Relations'
 import styles from './Play.module.css'
 
 function Panel({ title, kind, children, onClose }: { title: string; kind: Modal['kind']; children: ReactNode; onClose: () => void }) {
@@ -20,20 +25,22 @@ function Panel({ title, kind, children, onClose }: { title: string; kind: Modal[
     return () => { if (el?.open) el.close() }
   }, [])
   return (
-    <dialog ref={ref} className={`${styles.dialog} ${kind === 'map' ? styles.mapDialog : kind === 'hint' ? styles.hintDialog : styles.detailDialog}`} onCancel={(event) => { event.preventDefault(); onClose() }} aria-label={title}>
+    <dialog ref={ref} className={`${styles.dialog} ${kind === 'map' ? styles.mapDialog : kind === 'hint' ? styles.hintDialog : kind === 'evidence' || kind === 'relations' ? styles.toolDialog : styles.detailDialog}`} onCancel={(event) => { event.preventDefault(); onClose() }} aria-label={title}>
       <div className={styles.dialogHead}><h2>{title}</h2><button type="button" onClick={onClose}>닫기 ×</button></div>
       {children}
     </dialog>
   )
 }
 
-type Modal = { kind: 'map' } | { kind: 'hint' } | { kind: 'zoom'; hotspot: Hotspot } | { kind: 'room'; room: MapRoom }
+type Modal = { kind: 'evidence' } | { kind: 'relations' } | { kind: 'map' } | { kind: 'hint' } | { kind: 'zoom'; hotspot: Hotspot } | { kind: 'room'; room: MapRoom }
 
 export default function Play() {
   const navigate = useNavigate()
   const session = useGameStore((s) => s.session)
   const setPanel = useNoteStore((s) => s.setPanel)
+  const notePanelOpen = useNoteStore((s) => s.panelOpen)
   const [placeId, setPlaceId] = useState('lobby')
+  const [npcId, setNpcId] = useState<string | undefined>(undefined)
   const [subviewId, setSubviewId] = useState<string | null>(null)
   const [modal, setModal] = useState<Modal | null>(null)
   const [helpOpen, setHelpOpen] = useState(false)
@@ -58,11 +65,26 @@ export default function Play() {
     setTutorialStep(seen ? null : 'inspect')
   }, [sessionId, phase])
 
-  const finishFieldTutorial = () => {
+  const markFieldTutorialSeen = () => {
     if (sessionId && phase === 'INVESTIGATION') {
       try { localStorage.setItem(`serin-field-guide-v1:${sessionId}`, 'done') } catch { /* 현재 화면에서만 종료 */ }
     }
+  }
+
+  const finishFieldTutorial = () => {
+    markFieldTutorialSeen()
     setTutorialStep(null)
+  }
+
+  const startInterviewTutorial = () => {
+    setTutorialStep('npc')
+  }
+
+  const advanceInterviewTutorial = () => {
+    if (!isInterviewTutorial(tutorialStep)) return
+    const next = nextInterviewTutorial(tutorialStep)
+    if (next) setTutorialStep(next)
+    else finishFieldTutorial()
   }
 
   const closePanel = () => {
@@ -105,13 +127,33 @@ export default function Play() {
   const availablePlaces = preview ? fieldPlaces : fieldPlaces.filter((p) => p.id === 'lobby')
   const place = availablePlaces.find((p) => p.id === placeId) ?? availablePlaces[0]
   const scene = subviewId && fieldSubviews[subviewId] ? fieldSubviews[subviewId] : place
+  const interviewNpcs = NPC_PUBLIC.filter((npc) => session?.unlockedNpcs.includes(npc.id))
+  const canInterview = phase === 'INVESTIGATION' && interviewNpcs.length > 0
+  const inInterview = placeId === 'interview' && canInterview
+  const selectedNpc = interviewNpcs.some((npc) => npc.id === npcId) ? npcId : undefined
+
+  useEffect(() => {
+    setNpcId(undefined)
+  }, [sessionId])
+
+  // 면담 화면·증거함·관계도의 인물 선택을 Play에서 공통 처리합니다.
+  const selectNpc = (id: string) => {
+    if (!canInterview || !interviewNpcs.some((npc) => npc.id === id)) return
+    if (selectedNpc && selectedNpc !== id) useChatStore.getState().clearDraft()
+    setNpcId(id)
+    setPlaceId('interview')
+    setSubviewId(null)
+    setModal(null)
+    if (tutorialStep !== null && !isInterviewTutorial(tutorialStep)) startInterviewTutorial()
+  }
 
   const selectPlace = (id: string) => {
     if (id === 'interview') {
-      if (session?.phase === 'INVESTIGATION' && session.unlockedNpcs.length > 0) {
+      if (canInterview) {
+        setPlaceId('interview')
+        setSubviewId(null)
         setModal(null)
-        if (tutorialStep !== null) finishFieldTutorial()
-        navigate('/chat')
+        if (tutorialStep !== null && !isInterviewTutorial(tutorialStep)) startInterviewTutorial()
       }
       return
     }
@@ -218,9 +260,9 @@ export default function Play() {
         <span>{session?.currentChapter ?? ''}</span>
         <div className={styles.actions}>
           <button type="button" data-tutorial="field-map" onClick={() => setModal({ kind: 'map' })}>설계도</button>
-          <button type="button" data-tutorial="field-goal" onClick={() => setModal({ kind: 'hint' })}>목표 · 힌트</button>
+          <button type="button" data-tutorial={inInterview ? "interview-hint" : "field-goal"} onClick={() => setModal({ kind: 'hint' })}>목표 · 힌트</button>
           <button type="button" onClick={() => setHelpOpen(true)}>도움말</button>
-          <button type="button" onClick={() => { setPlaceId('lobby'); setSubviewId(null); setModal(null); setTutorialStep('inspect') }}>현장 튜토리얼</button>
+          <button type="button" onClick={() => { setModal(null); if (inInterview) { startInterviewTutorial() } else { setPlaceId('lobby'); setSubviewId(null); setTutorialStep('inspect') } }}>{inInterview ? '면담 튜토리얼' : '현장 튜토리얼'}</button>
           {session?.canAccuse && <button type="button" onClick={() => navigate('/accuse')}>최종 추리</button>}
         </div>
       </header>
@@ -228,16 +270,26 @@ export default function Play() {
         <aside className={styles.sidebar} data-tutorial="field-place-list">
           <h3>조사 장소</h3>
           {availablePlaces.map((p) => (
-            <button key={p.id} type="button" className={place.id === p.id ? styles.active : ''} onClick={() => selectPlace(p.id)} aria-pressed={place.id === p.id}>
+            <button key={p.id} type="button" className={!inInterview && place.id === p.id ? styles.active : ''} onClick={() => selectPlace(p.id)} aria-pressed={!inInterview && place.id === p.id}>
               {p.name}<small>{p.floor}</small>
             </button>
           ))}
           <h3>면담</h3>
-          <button type="button" data-tutorial="field-interview" disabled={session?.phase !== 'INVESTIGATION' || !session.unlockedNpcs.length} onClick={() => selectPlace('interview')}>면담실<small>2층</small></button>
+          <button type="button" data-tutorial="field-interview" disabled={!canInterview} className={inInterview ? styles.active : ''} aria-pressed={inInterview} onClick={() => selectPlace('interview')}>면담실<small>2층</small></button>
+          {inInterview && <section data-tutorial="interview-npc-list" className={styles.interviewList}>
+            <h3>면담 대상</h3>
+            {interviewNpcs.map((npc) => <button key={npc.id} type="button" className={selectedNpc === npc.id ? styles.active : ''} aria-pressed={selectedNpc === npc.id} onClick={() => selectNpc(npc.id)}>{npc.name}<small>{npc.title}</small></button>)}
+          </section>}
         </aside>
         <main className={styles.main}>
           {preview && <p className={styles.preview}>개발용 화면 탐색 · 장소 해금 미연동. 일부 조사 지점은 서버 API로 연결했습니다.</p>}
-          <div className={styles.notice} role="status">지금 할 일 · {activeGoal ? objectiveLabel(activeGoal.objectiveId) : fallbackGoal}</div>
+          <div className={styles.notice} role="status">지금 할 일 · {activeGoal ? objectiveLabel(activeGoal.objectiveId) : inInterview ? '면담할 인물을 선택하고 질문하거나 증거를 제시하세요.' : fallbackGoal}</div>
+          {inInterview ? <>
+            <div className={styles.titlebar}><h2>면담실 <small>2층</small></h2></div>
+            <div className={`${styles.embeddedPanel} ${styles.interviewPanel}`}>
+              <Chat embedded npcId={selectedNpc} onNpcSelect={selectNpc} />
+            </div>
+          </> : <>
           <div className={styles.titlebar}>
             <h2>{scene.name} <small>{scene.floor}</small></h2>
             {subviewId && <button type="button" onClick={() => setSubviewId(null)}>← {place.name}으로 돌아가기</button>}
@@ -255,18 +307,21 @@ export default function Play() {
             <summary>현장 기록 · {observations.length}건</summary>
             {observations.length === 0 ? <p>아직 살펴본 조사 지점이 없습니다.</p> : <ul>{observations.map((item) => <li key={item}>{item}</li>)}</ul>}
           </details>
+          </>}
         </main>
         <nav className={styles.tools}>
           <h3>수사 도구</h3>
-          <button type="button" data-tutorial="field-evidence" onClick={() => navigate('/evidence')}>증거함 · {session?.foundEvidence.length ?? 0}개</button>
-          <button type="button" onClick={() => navigate('/relations')}>인물관계도</button>
-          <button type="button" onClick={() => setPanel(true)}>수사 기록</button>
+          <button type="button" data-tutorial="field-evidence" disabled={!sessionId} onClick={() => setModal({ kind: 'evidence' })}>증거함 · {session?.foundEvidence.length ?? 0}개</button>
+          <button type="button" disabled={!sessionId} onClick={() => setModal({ kind: 'relations' })}>인물관계도</button>
+          <button type="button" data-tutorial="interview-notes" onClick={() => setPanel(true)}>수사 기록</button>
         </nav>
       </div>
       <Toasts />
-      {tutorialStep && !modal && !helpOpen && <FieldTutorial step={tutorialStep} onSkip={finishFieldTutorial} /> }
+      {tutorialStep && !modal && !helpOpen && !notePanelOpen && (isInterviewTutorial(tutorialStep) === inInterview) && <FieldTutorial step={tutorialStep} onSkip={finishFieldTutorial} onNext={advanceInterviewTutorial} /> }
       <GameHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
-      {modal && <Panel kind={modal.kind} title={modal.kind === 'map' ? '설계도 · 구 본관' : modal.kind === 'hint' ? '목표 · 힌트' : modal.kind === 'zoom' ? modal.hotspot.label : modal.room.name} onClose={closePanel}>
+      {modal && <Panel kind={modal.kind} title={modal.kind === 'map' ? '설계도 · 구 본관' : modal.kind === 'hint' ? '목표 · 힌트' : modal.kind === 'zoom' ? modal.hotspot.label : modal.kind === 'evidence' ? '증거함' : modal.kind === 'relations' ? '인물관계도' : modal.room.name} onClose={closePanel}>
+        {modal.kind === 'evidence' && <div className={`${styles.embeddedPanel} ${styles.toolPanel}`}><Evidence embedded onNpcSelect={selectNpc} /></div>}
+        {modal.kind === 'relations' && <div className={`${styles.embeddedPanel} ${styles.toolPanel}`}><Relations embedded onNpcSelect={selectNpc} /></div>}
         {modal.kind === 'map' && <>
           <div className={styles.plans}>
             {floorMaps.map((floor) => <section key={floor.name} className={styles.plan}><h3>{floor.name}</h3>
@@ -293,7 +348,7 @@ export default function Play() {
             : objectiveItems.length === 0 ? <p>{fallbackGoal} (서버에서 제공한 목표 없음)</p>
             : <ul>{objectiveItems.map((item) => <li key={item.objectiveId}>{objectiveLabel(item.objectiveId)} · {objectiveStatusLabel(item.status)}</li>)}</ul>}
           {sessionId && <button type="button" onClick={() => setObjectiveRetry((n) => n + 1)}>목표 다시 확인</button>}
-          <h3>힌트</h3><p>{hint || '서버에서 1단계 힌트를 요청할 수 있습니다.'}</p><button type="button" disabled={!session || session.phase !== 'INVESTIGATION' || hintBusy} onClick={() => void requestHint()}>{hintBusy ? '불러오는 중…' : '힌트 확인'}</button></>}
+          <h3>힌트</h3><p data-tutorial="interview-hint-text">{hint || '서버에서 1단계 힌트를 요청할 수 있습니다.'}</p><button type="button" disabled={!session || session.phase !== 'INVESTIGATION' || hintBusy} onClick={() => void requestHint()}>{hintBusy ? '불러오는 중…' : '힌트 확인'}</button></>}
       </Panel>}
     </div>
   )

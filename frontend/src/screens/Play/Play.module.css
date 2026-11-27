@@ -8,10 +8,10 @@
 .sidebar { border-right: 1px solid #3b3029; }
 .tools { border-left: 1px solid #3b3029; }
 .sidebar h3,.tools h3 { margin: 10px 0; font-size: 13px; color: #c6a473; }
-.page button { padding: 9px 13px; background: #211d19; color: inherit; border: 1px solid #80633d; border-radius: 9px; cursor: pointer; }
-.page button:hover:not(:disabled),.page .active { background: #493827; border-color: #c6a473; }
-.page button:focus-visible { outline: 2px solid #f0d9a8; outline-offset: 2px; }
-.page button:disabled { opacity: .45; cursor: default; }
+.page button:not(.embeddedPanel button) { padding: 9px 13px; background: #211d19; color: inherit; border: 1px solid #80633d; border-radius: 9px; cursor: pointer; }
+.page button:not(.embeddedPanel button):hover:not(:disabled),.page .active { background: #493827; border-color: #c6a473; }
+.page button:not(.embeddedPanel button):focus-visible { outline: 2px solid #f0d9a8; outline-offset: 2px; }
+.page button:not(.embeddedPanel button):disabled { opacity: .45; cursor: default; }
 .sidebar button,.tools button { display: block; width: 100%; margin: 7px 0; text-align: left; font-size: 13px; }
 .sidebar button small { display: block; font-size: 10px; margin-top: 3px; color: #a29b90; }
 .main { min-width: 0; display: flex; flex-direction: column; gap: 10px; padding: 14px; }
@@ -95,4 +95,17 @@
   .scene { max-width: 100%; }
   .page :global(nav[aria-label="도움말 항목"]) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .detailImage { max-height: 48dvh; }
+}
+
+/* STEP 05: B 컴포넌트는 기존 스타일과 상태 관리를 유지합니다. */
+.embeddedPanel { min-width: 0; min-height: 0; overflow: hidden; }
+.interviewPanel { height: max(380px, calc(100dvh - 180px)); border-radius: 12px; }
+.toolDialog { width: min(1180px, 94vw); max-width: 94vw; }
+.toolPanel { height: min(70dvh, 760px); }
+.interviewList { max-height: min(42dvh, 360px); overflow-y: auto; }
+.interviewList button { overflow-wrap: anywhere; word-break: keep-all; }
+@media (max-width: 640px) {
+  .interviewPanel { height: max(460px, 72dvh); }
+  .toolPanel { height: 65dvh; }
+  .interviewList { max-height: 32dvh; }
 }

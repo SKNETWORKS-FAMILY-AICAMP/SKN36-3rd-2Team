@@ -21,7 +21,8 @@ function EvidenceThumb({ src }: { src: string }) {
   return <img className={styles.thumb} src={src} alt="" loading="lazy" draggable={false} onError={() => setFailed(true)} />
 }
 
-export default function Evidence({ embedded = false, onNpcSelect }: EmbedProps = {}) {
+// onClose: 통합 화면 팝업을 닫는 함수(「이 증거로 질문」 뒤에 부른다)
+export default function Evidence({ embedded = false, onNpcSelect, onClose }: EmbedProps & { onClose?: () => void } = {}) {
   const navigate = useNavigate()
   const session = useGameStore((s) => s.session)
   const ensure = useGameStore((s) => s.ensureSession)
@@ -182,7 +183,7 @@ export default function Evidence({ embedded = false, onNpcSelect }: EmbedProps =
                       type="button"
                       className="btn btn--sm"
                       disabled={draft.includes(detail.id) || draft.length >= MAX_DRAFT}
-                      onClick={() => { if (addDraft(detail.id) && !embedded) navigate('/chat') }}
+                      onClick={() => { if (!addDraft(detail.id)) return; if (embedded) onClose?.(); else navigate('/chat') }}
                     >
                       {draft.includes(detail.id) ? '질문 칸에 붙음 ✓' : draft.length >= MAX_DRAFT ? `최대 ${MAX_DRAFT}개까지 붙일 수 있음` : '이 증거로 질문'}
                     </button>

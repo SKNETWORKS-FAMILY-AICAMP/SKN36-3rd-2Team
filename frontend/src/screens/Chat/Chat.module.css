@@ -173,6 +173,9 @@ li:nth-child(even) .polaroid { transform: rotate(1.4deg); }
 /* 수사 기록 등을 열어 가운데 칸이 좁아지면(640px 이하) 인물을 위쪽 띠로 올리고 대화 카드를 칸 전체 폭으로 */
 @container (max-width: 640px) {
   .embedded .main { grid-template-columns: 1fr; grid-template-rows: 160px minmax(0, 1fr); }
+  /* 띠에서는 사진 칸을 사진 크기에 맞춰야 가장자리 흐림이 사진 끝에 걸린다 */
+  .embedded .frame { justify-content: center; }
+  .embedded .portrait { width: auto; height: 100%; max-width: 100%; }
 }
 
 /* 제시할 증거 칩(최대 2개) */

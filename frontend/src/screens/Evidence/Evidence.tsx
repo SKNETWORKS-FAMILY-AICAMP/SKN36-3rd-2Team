@@ -9,44 +9,16 @@ import { evidenceSlots } from '../../data/publicData'
 import { npcName } from '../../data/characters'
 import { SHOW_COLLECTION_PERCENT } from '../../config'
 import { useGameStore } from '../../store/gameStore'
-import type { EvidenceDetail } from '../../api/types'
+import { MAX_DRAFT, useChatStore } from '../../store/chatStore'
 import styles from './Evidence.module.css'
+import { EvidenceChips, EvidenceCompare, EvidencePhotoFigure, routeLabel } from './EvidenceParts'
 import type { EmbedProps } from '../embed'
-
-const ROUTE_LABEL: Record<NonNullable<EvidenceDetail['acquiredBy']>, string> = {
-  question: '질문으로 확보',
-  present: '증거 제시로 확보',
-  initial: '현장에서 확보',
-}
-const routeLabel = (d: EvidenceDetail) => (d.acquiredBy ? ROUTE_LABEL[d.acquiredBy] : '서버 기록 미제공')
-
-/** 획득 경로·보유 인물 요약 칩 (상세·비교 공용) */
-function EvidenceChips({ detail }: { detail: EvidenceDetail }) {
-  return (
-    <p className={styles.chips} aria-label="증거 요약">
-      <span>{routeLabel(detail)}</span>
-      <span>보유 · {npcName(detail.holderId)}</span>
-    </p>
-  )
-}
 
 /** 목록 칸 썸네일. 사진을 못 불러오면(서버에 사진 없음 등) 문서 아이콘으로 바꾼다 */
 function EvidenceThumb({ src }: { src: string }) {
   const [failed, setFailed] = useState(false)
   if (failed) return <FileText size={28} />
   return <img className={styles.thumb} src={src} alt="" loading="lazy" draggable={false} onError={() => setFailed(true)} />
-}
-
-/** 증거 사진 (상세·비교 공용). 이미지가 없거나 못 불러오면 숨긴다 */
-function EvidencePhotoFigure({ sessionId, id }: { sessionId?: string; id: string }) {
-  const ph = evidencePhoto(sessionId, id)
-  if (!ph) return null
-  return (
-    <figure className={styles.prop}>
-      <img src={ph.src} alt="" draggable={false} onError={(e) => { (e.currentTarget.parentElement as HTMLElement).style.display = 'none' }} />
-      <figcaption>{ph.caption}</figcaption>
-    </figure>
-  )
 }
 
 export default function Evidence({ embedded = false, onNpcSelect }: EmbedProps = {}) {
@@ -56,6 +28,9 @@ export default function Evidence({ embedded = false, onNpcSelect }: EmbedProps =
   const cache = useGameStore((s) => s.evidence)
   const loadEvidence = useGameStore((s) => s.loadEvidence)
   const [selected, setSelected] = useState<string | null>(null)
+  // 「이 증거로 질문」: 면담 입력창 위 칩(최대 2개)에 붙인다
+  const draft = useChatStore((s) => s.draft)
+  const addDraft = useChatStore((s) => s.addDraft)
   const [docIdx, setDocIdx] = useState(0)
   // 증거 비교: 켜면 증거를 최대 2개까지 골라 나란히 본다. 3번째를 고르면 먼저 고른 것이 빠진다.
   const [compareMode, setCompareMode] = useState(false)
@@ -160,31 +135,7 @@ export default function Evidence({ embedded = false, onNpcSelect }: EmbedProps =
             picks.length === 0 ? (
               <p className={styles.empty}>왼쪽에서 비교할 증거를 2개까지 고르세요.</p>
             ) : (
-              <div className={styles.compare}>
-                {picks.map((id) => {
-                  const d = cache[id]
-                  return d ? (
-                    <article key={id} className={`${styles.paper} ${styles.paperCompact}`}>
-                      <span className={styles.stamp}>{d.id}</span>
-                      <h2 className="serif">{d.title}</h2>
-                      <EvidenceChips detail={d} />
-                      <EvidencePhotoFigure sessionId={session?.sessionId} id={d.id} />
-                      {(d.documents ?? []).length > 1 ? (
-                        d.documents!.map((doc) => (
-                          <section key={doc.id} className={styles.docBlock}>
-                            <h3>{doc.label} · {doc.title}</h3>
-                            <p className={styles.body}>{doc.body}</p>
-                          </section>
-                        ))
-                      ) : (
-                        <p className={styles.body}>{d.documents?.[0]?.body ?? d.body ?? '증거 원문은 아직 서버에서 제공되지 않았습니다.'}</p>
-                      )}
-                    </article>
-                  ) : (
-                    <p key={id} className={styles.empty}>불러오는 중…</p>
-                  )
-                })}
-              </div>
+              <EvidenceCompare ids={picks} />
             )
           ) : !detail ? (
             <div className={styles.cover}>
@@ -227,6 +178,14 @@ export default function Evidence({ embedded = false, onNpcSelect }: EmbedProps =
                     <EvidenceChips detail={detail} />
                     <EvidencePhotoFigure key={detail.id} sessionId={session?.sessionId} id={detail.id} />
                     <p className={styles.body}>{(cur ? cur.body : detail.body) ?? "증거 원문은 아직 서버에서 제공되지 않았습니다."}</p>
+                    <button
+                      type="button"
+                      className="btn btn--sm"
+                      disabled={draft.includes(detail.id) || draft.length >= MAX_DRAFT}
+                      onClick={() => { if (addDraft(detail.id) && !embedded) navigate('/chat') }}
+                    >
+                      {draft.includes(detail.id) ? '질문 칸에 붙음 ✓' : draft.length >= MAX_DRAFT ? `최대 ${MAX_DRAFT}개까지 붙일 수 있음` : '이 증거로 질문'}
+                    </button>
                   </>
                 )
               })()}

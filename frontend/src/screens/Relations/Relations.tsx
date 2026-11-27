@@ -28,8 +28,6 @@ const VICTIM = {
   id: VICTIM_ID,
   name: '신기범',
   title: '사건 피해자',
-  age: '',
-  look: '',
 }
 
 // 모든 관계도 좌표를 한곳에서 관리합니다.
@@ -420,22 +418,6 @@ export default function Relations({ embedded = false, onNpcSelect }: EmbedProps 
               <p className={styles.role}>
                 {picked.title}
               </p>
-
-              <dl>
-                {picked.age && (
-                  <div>
-                    <dt>나이대</dt>
-                    <dd>{picked.age}</dd>
-                  </div>
-                )}
-
-                {picked.look && (
-                  <div>
-                    <dt>외형</dt>
-                    <dd>{picked.look}</dd>
-                  </div>
-                )}
-              </dl>
 
               <h3>확인된 관계</h3>
 

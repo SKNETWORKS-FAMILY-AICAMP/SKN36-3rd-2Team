@@ -9,7 +9,7 @@ export interface GameApi {
   getState(sessionId: string): Promise<SessionState>
   getMessages(sessionId: string, npcId: string): Promise<Message[]>
   sendMessage(sessionId: string, npcId: string, text: string): Promise<ChatReply>
-  presentEvidence(sessionId: string, npcId: string, evidenceId: string, question?: string): Promise<ChatReply>
+  presentEvidence(sessionId: string, npcId: string, evidenceIds: string[], question?: string): Promise<ChatReply>
   getEvidence(sessionId: string, evidenceId: string): Promise<EvidenceDetail>
   getAvailableEvidence(sessionId: string): Promise<AvailableEvidence[]>
   collectEvidence(sessionId: string, evidenceId: string): Promise<GameEvent[]>

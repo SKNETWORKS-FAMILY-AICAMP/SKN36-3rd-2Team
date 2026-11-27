@@ -1,0 +1,55 @@
+.spotlight {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 80;
+  pointer-events: none;
+  fill: rgba(0, 0, 0, .48);
+}
+.guide {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  width: min(340px, calc(100vw - 24px));
+  z-index: 90;
+  padding: 15px;
+  background: rgba(33, 29, 25, .70);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  border: 1px solid #c6a473;
+  border-radius: 7px;
+  box-shadow: 0 8px 30px #0009;
+  color: #fff2dd;
+  text-shadow: 0 1px 3px #000;
+  box-sizing: border-box;
+  max-height: calc(100dvh - 24px);
+  overflow-y: auto;
+}
+.guide.docked {
+  position: relative;
+  top: auto;
+  left: auto;
+  width: min(680px, calc(100% - 24px));
+  margin: 8px auto;
+  max-height: none;
+  z-index: auto;
+}
+.guide small { color: #c6a473; }
+.guide h3 { margin: 6px 0; font-size: 16px; }
+.guide p { margin: 6px 0 12px; font-size: 13px; line-height: 1.6; }
+.controls { display: flex; flex-wrap: wrap; gap: 6px; }
+.guide .controls button { flex: 1 1 auto; font-size: 12px; }
+.highlight {
+  outline: 3px solid #e9c47e !important;
+  outline-offset: 3px;
+  animation: fieldPulse 1.5s ease-in-out infinite;
+}
+@keyframes fieldPulse {
+  0%, 100% { box-shadow: 0 0 4px #d9a85a; }
+  50% { box-shadow: 0 0 18px #e9c47e; }
+}
+@media (prefers-reduced-motion: reduce) { .highlight { animation: none; } }
+.highlight:disabled { opacity: .85 !important; }
+.waiting { color: #c6a473; }
+.highlight[data-tutorial="interview-save-statement"] { opacity: 1; }

@@ -308,8 +308,8 @@ async function ensureNpcSelected(
 
   let game = await request<BackendGameState>(path)
 
-  // 첫 대화가 시작되면 조사 단계로 전환합니다.
-  // 프롤로그 완료 화면과 연결하는 작업은 별도로 진행합니다.
+  // 프롤로그가 완료되지 않은 경우 조사 단계로 전환
+  // 오프닝 종료 시 명시적 호출은 별도로 유지
   if (game.phase === 'PROLOGUE') {
     game = await request<BackendGameState>(
       `${path}/prologue/complete`,
@@ -338,6 +338,27 @@ async function ensureNpcSelected(
 // ============================================================
 
 export const httpApi: GameApi = {
+  // 프롤로그 완료 및 조사 단계 전환
+  completePrologue: async (sessionId): Promise<void> => {
+    const path = gamePath(sessionId)
+    const game = await request<BackendGameState>(path)
+
+    if (game.phase === 'INVESTIGATION') return
+
+    if (game.phase !== 'PROLOGUE') {
+      throw new Error('프롤로그를 완료할 수 없는 단계입니다.')
+    }
+
+    const result = await request<BackendGameState>(
+      `${path}/prologue/complete`,
+      { method: 'POST' },
+    )
+
+    if (result.phase !== 'INVESTIGATION') {
+      throw new Error('조사 단계로 전환하지 못했습니다.')
+    }
+  },
+
   // ----------------------------------------------------------
   // 1. 게임 생성
   // ----------------------------------------------------------

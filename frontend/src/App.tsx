@@ -6,6 +6,7 @@ import Chat from './screens/Chat/Chat'
 import Evidence from './screens/Evidence/Evidence'
 import Relations from './screens/Relations/Relations'
 import Story from './screens/Story/Story'
+import Play from './screens/Play/Play'
 import Accuse from './screens/Accuse/Accuse'
 import Final from './screens/Final/Final'
 import { useEffect } from 'react'
@@ -15,6 +16,7 @@ function OpenNotes() {
   useEffect(() => useNoteStore.getState().setPanel(true), [])
   return <Navigate to="/chat" replace />
 }
+
 import NotesPanel from './components/NotesPanel'
 import StoryEventOverlay from './components/StoryEventOverlay'
 
@@ -48,6 +50,7 @@ function AnimatedRoutes() {
         <Routes location={location}>
         <Route path="/" element={<Main />} />
         <Route path="/story" element={<Story />} />
+        <Route path="/play" element={<Play />} />
         <Route path="/chat" element={<Chat />} />
         <Route path="/chat/:npcId" element={<Chat />} />
         <Route path="/evidence" element={<Evidence />} />

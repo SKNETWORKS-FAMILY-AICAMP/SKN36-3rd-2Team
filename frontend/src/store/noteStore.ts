@@ -32,6 +32,13 @@ function loadStatements(): SavedStatement[] {
   return []
 }
 
+/** 타임라인에서 플레이어가 직접 표시한 모순(항목 ID). 이 기기에만 저장한다 */
+const MARK_KEY = 'serin-timeline-marks-v1'
+function loadMarks(): string[] {
+  try { const v = JSON.parse(localStorage.getItem(MARK_KEY) ?? '[]'); if (Array.isArray(v)) return v } catch { /* ignore */ }
+  return []
+}
+
 const WIDTH_KEY = 'serin-notes-width'
 export const NOTE_MIN_W = 320
 export const NOTE_DEFAULT_W = 560
@@ -55,6 +62,9 @@ interface NoteStore {
   statements: SavedStatement[]
   /** 같은 진술이면 저장 취소, 아니면 저장 */
   toggleStatement: (s: SavedStatement) => void
+  marks: string[]
+  /** 타임라인 모순 표시를 켜고 끈다 */
+  toggleMark: (id: string) => void
   setPanel: (open: boolean) => void
   /** 새 게임 시작 시 노트를 비운다 */
   clear: () => void
@@ -68,6 +78,13 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
     const statements = cur.some((x) => x.id === s.id) ? cur.filter((x) => x.id !== s.id) : [...cur, s]
     set({ statements })
     try { localStorage.setItem(STATEMENT_KEY, JSON.stringify(statements)) } catch { /* ignore */ }
+  },
+  marks: loadMarks(),
+  toggleMark(id) {
+    const cur = get().marks
+    const marks = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]
+    set({ marks })
+    try { localStorage.setItem(MARK_KEY, JSON.stringify(marks)) } catch { /* ignore */ }
   },
   panelOpen: false,
   panelWidth: loadWidth(),
@@ -83,7 +100,7 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
   },
   setPanel: (panelOpen) => set({ panelOpen }),
   clear() {
-    set({ notes: empty(), statements: [], panelOpen: false })
-    try { localStorage.removeItem(KEY); localStorage.removeItem(STATEMENT_KEY) } catch { /* ignore */ }
+    set({ notes: empty(), statements: [], marks: [], panelOpen: false })
+    try { localStorage.removeItem(KEY); localStorage.removeItem(STATEMENT_KEY); localStorage.removeItem(MARK_KEY) } catch { /* ignore */ }
   },
 }))

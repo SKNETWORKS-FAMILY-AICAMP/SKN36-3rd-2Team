@@ -37,6 +37,12 @@ type Modal = { kind: 'evidence' } | { kind: 'relations' } | { kind: 'map' } | { 
 export default function Play() {
   const navigate = useNavigate()
   const session = useGameStore((s) => s.session)
+  const ensureSession = useGameStore((s) => s.ensureSession)
+  const starting = useGameStore((s) => s.starting)
+  const final = useGameStore((s) => s.final)
+  const [restoreError, setRestoreError] = useState('')
+  const [restoreRetry, setRestoreRetry] = useState(0)
+  const restoreAttempt = useRef<{ retry: number; promise: Promise<void> } | null>(null)
   const setPanel = useNoteStore((s) => s.setPanel)
   const notePanelOpen = useNoteStore((s) => s.panelOpen)
   const [placeId, setPlaceId] = useState('lobby')
@@ -54,6 +60,39 @@ export default function Play() {
 
   const sessionId = session?.sessionId
   const phase = session?.phase
+  // 새로고침으로 Zustand 상태가 초기화되면 기존 서버 세션을 복원합니다.
+  // 저장된 세션이 없는 개발용 화면은 기존처럼 탐색할 수 있습니다.
+  useEffect(() => {
+    if (sessionId || starting) return
+    let savedId: string | null = null
+    try { savedId = localStorage.getItem('serin-session-id') } catch { /* 저장소 사용 불가 */ }
+    if (!savedId) {
+      if (!import.meta.env.DEV) navigate('/', { replace: true })
+      return
+    }
+
+    // StrictMode 및 starting 변경으로 effect가 다시 실행되어도 같은 요청을 공유합니다.
+    if (restoreAttempt.current?.retry !== restoreRetry) {
+      setRestoreError('')
+      restoreAttempt.current = { retry: restoreRetry, promise: ensureSession() }
+    }
+    let active = true
+    void restoreAttempt.current.promise.then(() => {
+      if (!useGameStore.getState().session) throw new Error('게임 세션을 불러오지 못했습니다.')
+    }).catch((error: unknown) => {
+      if (active) setRestoreError(error instanceof Error ? error.message : '게임 세션을 불러오지 못했습니다.')
+    })
+    return () => { active = false }
+  }, [sessionId, starting, restoreRetry, ensureSession, navigate])
+
+  // 프롤로그나 종료 상태를 조사 단계로 임의 변경하지 않습니다.
+  useEffect(() => {
+    if (!sessionId || starting) return
+    if (final || phase === 'FINISHED') navigate('/final', { replace: true })
+    else if (phase === 'PROLOGUE') navigate('/story', { replace: true })
+    else if (phase === 'ACCUSATION') navigate('/accuse', { replace: true })
+  }, [sessionId, phase, final, starting, navigate])
+
   const [tutorialStep, setTutorialStep] = useState<FieldTutorialStep | null>(null)
   useEffect(() => {
     if (!sessionId || phase !== 'INVESTIGATION') {
@@ -102,7 +141,7 @@ export default function Play() {
   const [objectiveRetry, setObjectiveRetry] = useState(0)
 
   useEffect(() => {
-    if (!sessionId) return
+    if (!sessionId || phase !== 'INVESTIGATION') return
     let active = true
     setObjectiveState(null)
     void getObjectives(sessionId)
@@ -113,7 +152,7 @@ export default function Play() {
         if (active) setObjectiveState({ sessionId, revision, items: [], error: true })
       })
     return () => { active = false }
-  }, [sessionId, revision, objectiveRetry])
+  }, [sessionId, phase, revision, objectiveRetry])
 
   const currentObjectives = objectiveState?.sessionId === sessionId && objectiveState?.revision === revision
     ? objectiveState : null
@@ -266,6 +305,7 @@ export default function Play() {
           {session?.canAccuse && <button type="button" onClick={() => navigate('/accuse')}>최종 추리</button>}
         </div>
       </header>
+      {tutorialStep && !modal && !helpOpen && !notePanelOpen && (isInterviewTutorial(tutorialStep) === inInterview) && <FieldTutorial step={tutorialStep} onSkip={finishFieldTutorial} onNext={advanceInterviewTutorial} /> }
       <div className={styles.layout}>
         <aside className={styles.sidebar} data-tutorial="field-place-list">
           <h3>조사 장소</h3>
@@ -283,6 +323,12 @@ export default function Play() {
         </aside>
         <main className={styles.main}>
           {preview && <p className={styles.preview}>개발용 화면 탐색 · 장소 해금 미연동. 일부 조사 지점은 서버 API로 연결했습니다.</p>}
+          {starting && !sessionId && <p className={styles.notice} role="status">게임 세션을 불러오는 중입니다.</p>}
+          {!sessionId && restoreError && <div className={styles.notice} role="alert">
+            <p>게임 세션 복원 실패: {restoreError}</p>
+            <button type="button" disabled={starting} onClick={() => { setRestoreError(''); setRestoreRetry((n) => n + 1) }}>다시 시도</button>
+            <button type="button" onClick={() => navigate('/')}>메인으로 돌아가기</button>
+          </div>}
           <div className={styles.notice} role="status">지금 할 일 · {activeGoal ? objectiveLabel(activeGoal.objectiveId) : inInterview ? '면담할 인물을 선택하고 질문하거나 증거를 제시하세요.' : fallbackGoal}</div>
           {inInterview ? <>
             <div className={styles.titlebar}><h2>면담실 <small>2층</small></h2></div>
@@ -311,13 +357,12 @@ export default function Play() {
         </main>
         <nav className={styles.tools}>
           <h3>수사 도구</h3>
-          <button type="button" data-tutorial="field-evidence" disabled={!sessionId} onClick={() => setModal({ kind: 'evidence' })}>증거함 · {session?.foundEvidence.length ?? 0}개</button>
-          <button type="button" disabled={!sessionId} onClick={() => setModal({ kind: 'relations' })}>인물관계도</button>
+          <button type="button" data-tutorial="field-evidence" disabled={phase !== 'INVESTIGATION'} onClick={() => setModal({ kind: 'evidence' })}>증거함 · {session?.foundEvidence.length ?? 0}개</button>
+          <button type="button" disabled={phase !== 'INVESTIGATION'} onClick={() => setModal({ kind: 'relations' })}>인물관계도</button>
           <button type="button" data-tutorial="interview-notes" onClick={() => setPanel(true)}>수사 기록</button>
         </nav>
       </div>
       <Toasts />
-      {tutorialStep && !modal && !helpOpen && !notePanelOpen && (isInterviewTutorial(tutorialStep) === inInterview) && <FieldTutorial step={tutorialStep} onSkip={finishFieldTutorial} onNext={advanceInterviewTutorial} /> }
       <GameHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
       {modal && <Panel kind={modal.kind} title={modal.kind === 'map' ? '설계도 · 구 본관' : modal.kind === 'hint' ? '목표 · 힌트' : modal.kind === 'zoom' ? modal.hotspot.label : modal.kind === 'evidence' ? '증거함' : modal.kind === 'relations' ? '인물관계도' : modal.room.name} onClose={closePanel}>
         {modal.kind === 'evidence' && <div className={`${styles.embeddedPanel} ${styles.toolPanel}`}><Evidence embedded onNpcSelect={selectNpc} /></div>}

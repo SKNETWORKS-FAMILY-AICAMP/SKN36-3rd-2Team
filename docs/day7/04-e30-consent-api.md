@@ -280,3 +280,48 @@ E30 우회 공개 여부를 추가 검증한다.
 
 기존 콘텐츠 보호 정책을 유지하며,
 FastAPI 및 Django 전체 회귀 테스트를 통과했다.
+
+---
+
+## 이슈 #210 - 동의 API 별칭
+
+- 작업 일자: 2026-11-28
+- 작업 브랜치: feature/210-consent-api-alias
+
+### 신규 권장 API
+
+    POST /api/games/{session_id}/consent
+
+### 기존 API
+
+    POST /api/games/{session_id}/evidence/E30/consent
+
+두 API는 동일한 동의 처리 함수와 GameResponse 응답 구조를 사용한다.
+
+### 요청 형식
+
+    {
+      "expectedRevision": 12,
+      "consent": true
+    }
+
+### 변경 사항
+
+- 증거 ID가 포함되지 않는 동의 API 경로 추가
+- 기존 API 하위 호환성 유지
+- 기존 요청 및 응답 형식 유지
+- 기존 Django 콘텐츠 승인 정책 유지
+- 신규 및 기존 API 간 교차 호출 멱등성 유지
+- 프론트엔드 스포일러 검사 충돌 해결
+
+### 테스트 결과
+
+- 동의 API 초기 검증: 22건 통과
+- 관련 기능 통합 테스트: 129건 통과, 3건 제외
+- 전체 백엔드 회귀 테스트: 3161건 통과, 26건 제외
+- 테스트 실패: 0건
+
+상세 작업 내용은 docs/day9/01-consent-api-alias.md를 참고한다.
+
+실제 콘텐츠 승인 서버 및 프론트엔드 실서버 연동 검증은
+별도로 진행한다.

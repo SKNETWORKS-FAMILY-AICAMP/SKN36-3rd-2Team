@@ -1661,6 +1661,10 @@ def create_app(
         )
 
     @app.post(
+        "/api/games/{session_id}/consent",
+        response_model=GameResponse,
+    )
+    @app.post(
         "/api/games/{session_id}/evidence/E30/consent",
         response_model=GameResponse,
     )

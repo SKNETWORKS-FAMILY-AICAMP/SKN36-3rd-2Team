@@ -695,8 +695,17 @@ def test_real_private_ending_image_delivery(
 
 # Issue #192 - E30 player consent
 
+# Issue #210 - Verify both consent endpoints.
+@pytest.fixture(
+    params=["consent", "evidence/E30/consent"],
+    ids=["alias", "legacy"],
+)
+def consent_path(request):
+    return request.param
 
-def test_e30_consent_unapproved_by_default(runtime):
+
+
+def test_e30_consent_unapproved_by_default(runtime, consent_path):
     app, client, repository, sid, _ = runtime
 
     prepare(runtime)
@@ -710,7 +719,7 @@ def test_e30_consent_unapproved_by_default(runtime):
     assert response.json()["e30ConsentGranted"] is False
 
     response = client.post(
-        f"/api/games/{sid}/evidence/E30/consent",
+        f"/api/games/{sid}/{consent_path}",
         json={
             "expectedRevision": before.revision,
             "consent": True,
@@ -721,7 +730,7 @@ def test_e30_consent_unapproved_by_default(runtime):
     assert repository.load_state(sid) == before
 
 
-def test_e30_consent_records_player_choice_only(runtime):
+def test_e30_consent_records_player_choice_only(runtime, consent_path):
     app, client, repository, sid, _ = runtime
 
     prepare(runtime)
@@ -730,7 +739,7 @@ def test_e30_consent_records_player_choice_only(runtime):
     app.state.e30_approval_check = lambda state: True
 
     before = repository.load_state(sid)
-    url = f"/api/games/{sid}/evidence/E30/consent"
+    url = f"/api/games/{sid}/{consent_path}"
 
     response = client.get(f"/api/games/{sid}")
 
@@ -784,7 +793,7 @@ def test_e30_consent_records_player_choice_only(runtime):
     assert repository.load_state(sid) == after
 
 
-def test_e30_consent_missing_prerequisites(runtime):
+def test_e30_consent_missing_prerequisites(runtime, consent_path):
     app, client, repository, sid, _ = runtime
 
     prepare(runtime, full=False)
@@ -798,7 +807,7 @@ def test_e30_consent_missing_prerequisites(runtime):
     assert response.json()["e30ConsentAvailable"] is False
 
     response = client.post(
-        f"/api/games/{sid}/evidence/E30/consent",
+        f"/api/games/{sid}/{consent_path}",
         json={
             "expectedRevision": before.revision,
             "consent": True,
@@ -813,6 +822,7 @@ def test_e30_consent_missing_prerequisites(runtime):
 def test_e30_consent_requires_explicit_boolean(
     runtime,
     invalid_consent,
+    consent_path,
 ):
     app, client, repository, sid, _ = runtime
 
@@ -823,7 +833,7 @@ def test_e30_consent_requires_explicit_boolean(
     before = repository.load_state(sid)
 
     response = client.post(
-        f"/api/games/{sid}/evidence/E30/consent",
+        f"/api/games/{sid}/{consent_path}",
         json={
             "expectedRevision": before.revision,
             "consent": invalid_consent,
@@ -834,7 +844,7 @@ def test_e30_consent_requires_explicit_boolean(
     assert repository.load_state(sid) == before
 
 
-def test_e30_consent_rejects_stale_revision(runtime):
+def test_e30_consent_rejects_stale_revision(runtime, consent_path):
     app, client, repository, sid, _ = runtime
 
     prepare(runtime)
@@ -844,7 +854,7 @@ def test_e30_consent_rejects_stale_revision(runtime):
     before = repository.load_state(sid)
 
     response = client.post(
-        f"/api/games/{sid}/evidence/E30/consent",
+        f"/api/games/{sid}/{consent_path}",
         json={
             "expectedRevision": before.revision - 1,
             "consent": True,
@@ -855,7 +865,7 @@ def test_e30_consent_rejects_stale_revision(runtime):
     assert repository.load_state(sid) == before
 
 
-def test_e30_consent_rejects_other_session(runtime):
+def test_e30_consent_rejects_other_session(runtime, consent_path):
     app, _, repository, sid, _ = runtime
 
     prepare(runtime)
@@ -868,7 +878,7 @@ def test_e30_consent_rejects_other_session(runtime):
         assert outsider.post("/api/games").status_code == 201
 
         response = outsider.post(
-            f"/api/games/{sid}/evidence/E30/consent",
+            f"/api/games/{sid}/{consent_path}",
             json={
                 "expectedRevision": before.revision,
                 "consent": True,
@@ -880,7 +890,7 @@ def test_e30_consent_rejects_other_session(runtime):
     assert repository.load_state(sid) == before
 
 
-def test_e30_consent_approval_failure_is_fail_closed(runtime):
+def test_e30_consent_approval_failure_is_fail_closed(runtime, consent_path):
     app, client, repository, sid, _ = runtime
 
     prepare(runtime)
@@ -898,7 +908,7 @@ def test_e30_consent_approval_failure_is_fail_closed(runtime):
     assert response.json()["e30ConsentAvailable"] is False
 
     response = client.post(
-        f"/api/games/{sid}/evidence/E30/consent",
+        f"/api/games/{sid}/{consent_path}",
         json={
             "expectedRevision": before.revision,
             "consent": True,
@@ -909,7 +919,7 @@ def test_e30_consent_approval_failure_is_fail_closed(runtime):
     assert repository.load_state(sid) == before
 
 
-def test_e30_consent_rejects_finished_game(runtime):
+def test_e30_consent_rejects_finished_game(runtime, consent_path):
     app, client, repository, sid, _ = runtime
 
     finish_image_test_game(runtime, "FULL")
@@ -919,7 +929,7 @@ def test_e30_consent_rejects_finished_game(runtime):
     before = repository.load_state(sid)
 
     response = client.post(
-        f"/api/games/{sid}/evidence/E30/consent",
+        f"/api/games/{sid}/{consent_path}",
         json={
             "expectedRevision": before.revision,
             "consent": True,
@@ -928,3 +938,73 @@ def test_e30_consent_rejects_finished_game(runtime):
 
     assert response.status_code == 409
     assert repository.load_state(sid) == before
+
+@pytest.mark.parametrize(
+    ("first_path", "second_path"),
+    [
+        ("consent", "evidence/E30/consent"),
+        ("evidence/E30/consent", "consent"),
+    ],
+    ids=["alias-to-legacy", "legacy-to-alias"],
+)
+def test_e30_consent_cross_endpoint_idempotency(
+    runtime,
+    first_path,
+    second_path,
+):
+    app, client, repository, sid, _ = runtime
+
+    prepare(runtime)
+    app.state.e30_approval_check = lambda state: True
+
+    before = repository.load_state(sid)
+
+    first = client.post(
+        f"/api/games/{sid}/{first_path}",
+        json={
+            "expectedRevision": before.revision,
+            "consent": True,
+        },
+    )
+
+    assert first.status_code == 200
+    assert first.json()["e30ConsentGranted"] is True
+    assert first.headers["cache-control"] == "private, no-store"
+
+    after = repository.load_state(sid)
+
+    assert after.revision == before.revision + 1
+    assert after.e30_player_consent is True
+
+    second = client.post(
+        f"/api/games/{sid}/{second_path}",
+        json={
+            "expectedRevision": after.revision,
+            "consent": True,
+        },
+    )
+
+    assert second.status_code == 200
+    assert second.json() == first.json()
+    assert second.headers["cache-control"] == "private, no-store"
+    assert repository.load_state(sid) == after
+
+    # A stale request must not change the persisted state.
+    stale = client.post(
+        f"/api/games/{sid}/{second_path}",
+        json={
+            "expectedRevision": before.revision,
+            "consent": True,
+        },
+    )
+
+    assert stale.status_code == 409
+    assert repository.load_state(sid) == after
+
+    # Consent alone must not unlock protected content.
+    assert after.evidence == before.evidence
+    assert after.score == before.score
+    assert after.flags == before.flags
+    assert after.document_grants == before.document_grants
+    assert after.queued_story_events == before.queued_story_events
+    assert "E30" not in after.evidence

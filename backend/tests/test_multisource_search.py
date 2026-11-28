@@ -303,3 +303,63 @@ def test_empty_question_rejected(registry, searches):
             registry,
             query="  ",
         )
+
+def test_keywordless_sparse_keeps_dense_and_graph(
+    registry,
+    searches,
+):
+    from crimescene.retriever.korean_bm25 import (
+        NoSearchKeywordsError,
+    )
+
+    _, _, sparse = searches
+
+    sparse.side_effect = NoSearchKeywordsError(
+        "No searchable tokens"
+    )
+
+    result = run_search(registry)
+
+    assert {
+        (item.kind, item.item_id)
+        for item in result
+    } == {
+        ("chunk", "A"),
+        ("chunk", "B"),
+        ("relation", "REL-001"),
+    }
+
+
+def test_keywordless_sparse_does_not_bypass_trust_validation(
+    registry,
+    searches,
+):
+    from crimescene.retriever.korean_bm25 import (
+        NoSearchKeywordsError,
+    )
+
+    _, _, sparse = searches
+
+    sparse.side_effect = NoSearchKeywordsError(
+        "No searchable tokens"
+    )
+
+    with pytest.raises(ValueError):
+        run_search(
+            registry,
+            trusted_point_ids={"A"},
+        )
+
+
+def test_multisource_sparse_integrity_error_not_suppressed(
+    registry,
+    searches,
+):
+    _, _, sparse = searches
+
+    sparse.side_effect = ValueError(
+        "Invalid sparse vector"
+    )
+
+    with pytest.raises(ValueError, match="Invalid sparse vector"):
+        run_search(registry)

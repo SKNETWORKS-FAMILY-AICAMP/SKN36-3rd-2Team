@@ -1,6 +1,7 @@
 """Issue #172 - bounded and authorization-aware NPC memory."""
 
 import json
+import re
 from collections.abc import Sequence
 
 from crimescene.chat.npc_dialogue_intent import (
@@ -23,6 +24,65 @@ from crimescene.retriever.authorized_multisource_context import (
 
 MAX_SEARCH_CONTEXT_CHARS = 400
 MAX_ANCHOR_QUESTION_CHARS = 200
+
+
+VICTIM_RELATION_RESTATEMENT = re.compile(
+    r"(?:앞에서|아까|이전에)\s*말씀하신\s*"
+    r"신기범\s*씨와의\s*관계를\s*"
+    r"다시\s*설명해 ?주세요[.!?~]*"
+)
+
+VICTIM_RELATION_QUESTION = re.compile(
+    r"(?:신기범\s*씨를\s*어떻게\s*알고\s*계셨나요"
+    r"|피해자와\s*어떤\s*관계였나요)[.!?~]*"
+)
+
+CONTEXTUAL_CLARIFICATION = re.compile(
+    r"(?:방금 말씀하신 내용을\s*"
+    r"(?:다시|좀 더 자세히)\s*설명해 ?주세요"
+    r"|(?:그 사람|그분)에 대해\s*"
+    r"방금 말씀하신 내용을\s*좀 더\s*설명해 ?주세요"
+    r"|조금 더 설명해 ?주세요"
+    r"|좀 더 자세히 말해 ?주세요)"
+    r"[.!?~]*"
+)
+
+CANONICAL_VICTIM_QUESTION = (
+    "신기범 씨를 어떻게 알고 계셨나요?"
+)
+
+
+def _bounded_question(question: str) -> str:
+    """안전한 정규화 범위만 허용한다."""
+
+    if not isinstance(question, str):
+        return ""
+
+    if any(c in question for c in ("\r", "\n", "\x00")):
+        return ""
+
+    normalized = " ".join(question.split())
+
+    if len(normalized) > 120:
+        return ""
+
+    return normalized
+
+
+def _is_victim_relation_restatement(question: str) -> bool:
+    return VICTIM_RELATION_RESTATEMENT.fullmatch(
+        _bounded_question(question)
+    ) is not None
+
+
+def _is_victim_relation_question(question: str) -> bool:
+    normalized = _bounded_question(question)
+
+    return (
+        VICTIM_RELATION_QUESTION.fullmatch(normalized)
+        is not None
+        or _is_victim_relation_restatement(question)
+    )
 
 
 def _validate_inputs(
@@ -78,6 +138,16 @@ def build_memory_search_query(
     _validate_inputs(question, history, current_revision)
 
     question = question.strip()
+
+    # 명시적으로 피해자와의 관계를 재확인하는 질문은
+    # 고정된 관계 질문과 원래 검색어를 함께 사용한다.
+    if _is_victim_relation_restatement(question):
+        expanded = f"{CANONICAL_VICTIM_QUESTION} {question}"
+
+        if len(expanded) <= MAX_SEARCH_CONTEXT_CHARS:
+            return expanded
+
+        return question
 
     if classify_npc_dialogue_intent(question) is not (
         NPCDialogueIntent.FOLLOW_UP
@@ -201,3 +271,87 @@ def build_revalidated_repeat_output(
         )
 
     return None
+
+
+
+def is_allowed_contextual_repeat(
+    question: str,
+    history: Sequence[NPCExchange],
+    *,
+    current_revision: int,
+    context: AuthorizedMultisourceContext,
+    reply_text: str,
+    source_ids: tuple[str, ...],
+) -> bool:
+    """현재 승인된 동일 인용의 문맥상 재확인을 검증한다.
+
+    과거 응답으로 신규 접근 권한을 부여하지 않는다.
+    기존 Output Guard 통과 이후에만 호출한다.
+    """
+
+    _validate_inputs(question, history, current_revision)
+
+    if not isinstance(context, AuthorizedMultisourceContext):
+        return False
+
+    if not context.items or not source_ids:
+        return False
+
+    if not history or not _bounded_question(question):
+        return False
+
+    recent = history[-MAX_HISTORY_TURNS:]
+
+    def matches(exchange: NPCExchange) -> bool:
+        return (
+            _is_valid_exchange(exchange, current_revision)
+            and bool(exchange.source_ids)
+            and exchange.source_ids == source_ids
+            and exchange.npc_message == reply_text
+            and _revalidate_previous_reply(
+                exchange, context
+            ) == reply_text
+        )
+
+    # 피해자 관계가 명시된 재확인 질문만 제한적으로 허용한다.
+    if _is_victim_relation_restatement(question):
+
+        for exchange in reversed(recent):
+            if not _is_valid_exchange(
+                exchange, current_revision
+            ):
+                return False
+
+            if not _is_victim_relation_question(
+                exchange.user_message
+            ):
+                continue
+
+            # 가장 최근 관계 질문이 차단된 경우
+            # 더 오래된 응답을 복원하지 않는다.
+            return matches(exchange)
+
+        return False
+
+    # 일반 후속 질문은 직전의 승인 응답만 재확인한다.
+    # 인과관계 추론이나 새 사건 사실의 생성은 허용하지 않는다.
+    if not CONTEXTUAL_CLARIFICATION.fullmatch(
+        _bounded_question(question)
+    ):
+        return False
+
+    if classify_npc_dialogue_intent(question) is not (
+        NPCDialogueIntent.FOLLOW_UP
+    ):
+        return False
+
+    expanded = build_memory_search_query(
+        question,
+        recent,
+        current_revision=current_revision,
+    )
+
+    if expanded == question.strip():
+        return False
+
+    return matches(recent[-1])

@@ -91,6 +91,13 @@ def is_valid_stored_display(
     if display_text == FALLBACK_REPLY:
         return True
 
+    if message == FALLBACK_REPLY and not source_ids:
+        from crimescene.chat.npc_semantic_router import (
+            natural_refusal,
+        )
+
+        return display_text == natural_refusal(character_id)
+
     plain = _render_canonical_npc_message(
         message,
         source_ids,
@@ -104,6 +111,38 @@ def is_valid_stored_display(
 
     if "(근거:" in display_text or LEGACY_HEADER in display_text:
         return False
+
+    from crimescene.chat.npc_pilot_speech import (
+        render_pilot_speech,
+    )
+
+    pilot_display = render_pilot_speech(
+        message,
+        source_ids,
+        character_id,
+    )
+
+    if (
+        pilot_display is not None
+        and display_text == pilot_display
+    ):
+        return True
+
+    from crimescene.chat.npc_pilot_speech import (
+        render_pilot_speech,
+    )
+
+    pilot_display = render_pilot_speech(
+        message,
+        source_ids,
+        character_id,
+    )
+
+    if (
+        pilot_display is not None
+        and display_text == pilot_display
+    ):
+        return True
 
     # Preserve exact quote order and content.
     body = "\n".join(

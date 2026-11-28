@@ -549,3 +549,37 @@ def test_invalid_rrf_k(
             dependencies,
             rrf_k=rrf_k,
         )
+
+def test_keywordless_sparse_keeps_dense(
+    dependencies,
+    search_mocks,
+):
+    from crimescene.retriever.korean_bm25 import (
+        NoSearchKeywordsError,
+    )
+
+    dense, sparse = search_mocks
+
+    sparse.side_effect = NoSearchKeywordsError(
+        "No searchable tokens"
+    )
+
+    results = run_search(dependencies)
+
+    assert [item.point_id for item in results] == [
+        item.point_id for item in dense.return_value
+    ]
+
+
+def test_sparse_integrity_error_not_suppressed(
+    dependencies,
+    search_mocks,
+):
+    _, sparse = search_mocks
+
+    sparse.side_effect = ValueError(
+        "Invalid sparse vector"
+    )
+
+    with pytest.raises(ValueError, match="Invalid sparse vector"):
+        run_search(dependencies)

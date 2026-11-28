@@ -287,3 +287,29 @@ def test_token_hash_collision_rejected(
         match="충돌",
     ):
         encoder.encode_query("학교 기록")
+
+@pytest.mark.parametrize(
+    "question",
+    ["!!!", "오케이, 고마워요!"],
+)
+def test_keywordless_query_specific_exception(encoder, question):
+    from crimescene.retriever.korean_bm25 import (
+        NoSearchKeywordsError,
+    )
+
+    with pytest.raises(NoSearchKeywordsError):
+        encoder.encode_query(question)
+
+
+def test_empty_input_is_not_keywordless_exception(encoder):
+    from crimescene.retriever.korean_bm25 import (
+        NoSearchKeywordsError,
+    )
+
+    with pytest.raises(ValueError) as error:
+        encoder.encode_query(" ")
+
+    assert not isinstance(
+        error.value,
+        NoSearchKeywordsError,
+    )

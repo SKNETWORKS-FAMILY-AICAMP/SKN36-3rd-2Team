@@ -11,7 +11,10 @@ from qdrant_client import QdrantClient
 from crimescene.ingest.ollama_embedder import OllamaEmbedder
 from crimescene.retriever.dense_search import search_dense_candidates
 from crimescene.retriever.graph_search import CHARACTER_IDS
-from crimescene.retriever.korean_bm25 import KoreanBM25Encoder
+from crimescene.retriever.korean_bm25 import (
+    KoreanBM25Encoder,
+    NoSearchKeywordsError,
+)
 from crimescene.retriever.multisource_rrf import (
     FusedSearchCandidate,
     fuse_multisource_candidates,
@@ -237,18 +240,22 @@ def search_multisource_candidates(
     dense_ms = (perf_counter() - dense_started) * 1000
     bm25_started = perf_counter()
 
-    sparse_results = search_sparse_candidates(
-        vector_query,
-        client=qdrant_client,
-        encoder=encoder,
-        source_type="npc_knowledge",
-        case_id=state.case_id,
-        character_id=active_character_id,
-        top_k=candidate_k,
-        **retrieval_options(
-        state, collection_name=collection_name,
-    ),
-    )
+    try:
+        sparse_results = search_sparse_candidates(
+            vector_query,
+            client=qdrant_client,
+            encoder=encoder,
+            source_type="npc_knowledge",
+            case_id=state.case_id,
+            character_id=active_character_id,
+            top_k=candidate_k,
+            **retrieval_options(
+            state, collection_name=collection_name,
+        ),
+        )
+    except NoSearchKeywordsError:
+        # 키워드가 없는 자연어에서도 나머지 검색 경로를 유지한다.
+        sparse_results = []
 
     # --------------------------------------------------
     # 7. Qdrant UUID 신뢰 원본 검증

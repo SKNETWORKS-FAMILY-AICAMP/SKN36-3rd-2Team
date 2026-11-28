@@ -25,7 +25,8 @@ function load(): NoteData {
 }
 
 /** 면담 중 저장한 NPC 진술. 노트처럼 이 기기에만 저장한다 */
-export interface SavedStatement { id: string; npcId: string; text: string }
+/** 저장한 진술. question은 그 답변을 끌어낸 수사관 질문(증거 제시면 「[증거 제시] 증거 이름」 포함). 예전 저장분에는 없다 */
+export interface SavedStatement { id: string; npcId: string; text: string; question?: string }
 const STATEMENT_KEY = 'serin-statements-v1'
 function loadStatements(): SavedStatement[] {
   try { const v = JSON.parse(localStorage.getItem(STATEMENT_KEY) ?? '[]'); if (Array.isArray(v)) return v } catch { /* ignore */ }

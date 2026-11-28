@@ -1,0 +1,18 @@
+.page { display: flex; flex-direction: column; gap: var(--sp-3); padding: var(--sp-5); color: var(--paper-300); }
+.embedded { height: 100%; min-height: 0; padding: var(--sp-4); overflow-y: auto; }
+.title { font-family: var(--font-serif); font-size: var(--fs-h2); color: var(--paper-100); letter-spacing: var(--track-label); }
+.empty { margin: auto; max-width: 260px; text-align: center; font-size: var(--fs-small); color: var(--paper-400); }
+
+.order { display: flex; gap: var(--sp-1); }
+.order button { height: var(--btn-h-sm); padding: 0 var(--sp-3); font-size: var(--fs-small); color: var(--paper-300); background: none; border: var(--line); border-radius: 6px; cursor: pointer; }
+.order button[aria-pressed='true'] { color: var(--ink-950); background: var(--brass-500); border-color: var(--brass-500); }
+
+.list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-2); }
+.list li { display: grid; grid-template-columns: 64px 1fr; gap: var(--sp-1) var(--sp-3); padding: var(--sp-3); background: var(--ink-800); border: var(--line); border-left: 3px solid var(--ink-600); border-radius: 6px; }
+.list p { margin: 0; font-size: var(--fs-body); line-height: 1.55; color: var(--paper-200); }
+.time { font-family: var(--font-mono); font-size: var(--fs-small); color: var(--brass-400); padding-top: 2px; }
+.new { display: inline-block; margin-right: var(--sp-2); padding: 0 6px; font-size: var(--fs-cap); font-style: normal; color: var(--ink-950); background: var(--brass-400); border-radius: 4px; vertical-align: 1px; }
+.mark { grid-column: 2; justify-self: start; padding: 0; font-size: var(--fs-cap); color: var(--paper-400); background: none; border: 0; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+/* 플레이어가 직접 표시한 모순만 와인색 */
+.list li.marked { border-left-color: var(--blood-500); background: rgba(140, 42, 42, .14); }
+.marked .mark { color: var(--blood-400); }

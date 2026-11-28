@@ -437,3 +437,340 @@ def test_e26_http_rejects_client_section_approval(runtime):
     )
 
     assert response.status_code == 422
+
+# Issue #211 - Investigation location API
+
+
+def get_locations(runtime):
+    _, client, _, sid, _ = runtime
+    return client.get(f"/api/games/{sid}/locations")
+
+
+def location_actions(payload):
+    actions = {}
+
+    for location in payload["locations"]:
+        for item in location["actions"]:
+            actions[item["actionId"]] = item["available"]
+
+        for subspace in location["subspaces"]:
+            for item in subspace["actions"]:
+                actions[item["actionId"]] = item["available"]
+
+    return actions
+
+
+def test_location_layout_contract(runtime):
+    _, _, repository, sid, _ = runtime
+
+    before = repository.load_state(sid)
+
+    response = get_locations(runtime)
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "private, no-store"
+
+    payload = response.json()
+
+    assert payload["currentChapter"] == "CH03"
+    assert payload["revision"] == before.revision
+
+    assert set(payload) == {
+        "currentChapter", "revision", "locations",
+    }
+
+    locations = {
+        item["id"]: item
+        for item in payload["locations"]
+    }
+
+    assert set(locations) == {
+        "lobby", "stairs", "records", "office",
+        "security", "album", "counsel",
+    }
+
+    subspaces = {
+        item["id"]
+        for location in locations.values()
+        for item in location["subspaces"]
+    }
+
+    assert subspaces == {
+        "desk", "corridor", "admin", "student", "exit",
+    }
+
+    assert all(item["accessible"] for item in locations.values())
+    assert len(location_actions(payload)) == 9
+
+    assert repository.load_state(sid) == before
+
+
+def test_location_actions_follow_prerequisites(runtime):
+    response = get_locations(runtime)
+
+    assert response.status_code == 200
+
+    actions = location_actions(response.json())
+
+    assert actions["inspect-sensor-record"] is True
+    assert actions["inspect-emergency-door-record"] is False
+
+    assert perform(runtime).status_code == 200
+
+    response = get_locations(runtime)
+
+    assert response.status_code == 200
+
+    actions = location_actions(response.json())
+
+    assert actions["inspect-emergency-door-record"] is True
+
+
+def test_location_unapproved_action_unavailable(runtime):
+    app, _, repository, sid, _ = runtime
+
+    app.state.approved_investigation_actions = frozenset()
+
+    before = repository.load_state(sid)
+
+    response = get_locations(runtime)
+
+    assert response.status_code == 200
+    assert not any(location_actions(response.json()).values())
+
+    assert repository.load_state(sid) == before
+
+
+def test_location_unapproved_scene_unavailable(runtime):
+    _, _, repository, sid, settings = runtime
+
+    settings["scene_approved"] = False
+
+    before = repository.load_state(sid)
+
+    response = get_locations(runtime)
+
+    assert response.status_code == 200
+
+    actions = location_actions(response.json())
+
+    assert actions["inspect-sensor-record"] is False
+
+    assert repository.load_state(sid) == before
+
+
+def test_location_other_session_denied(runtime):
+    app, _, repository, sid, _ = runtime
+
+    before = repository.load_state(sid)
+
+    with TestClient(app) as outsider:
+        assert outsider.post("/api/games").status_code == 201
+
+        response = outsider.get(f"/api/games/{sid}/locations")
+
+        assert response.status_code == 404
+
+    assert repository.load_state(sid) == before
+
+
+def test_location_prologue_locked(runtime):
+    app, _, repository, _, _ = runtime
+
+    with TestClient(app) as client:
+        created = client.post("/api/games")
+
+        assert created.status_code == 201
+
+        sid = created.json()["sessionId"]
+        before = repository.load_state(sid)
+
+        response = client.get(f"/api/games/{sid}/locations")
+
+        assert response.status_code == 200
+
+        payload = response.json()
+
+        assert payload["currentChapter"] == "CH00"
+        assert not any(
+            item["accessible"]
+            for item in payload["locations"]
+        )
+
+        assert not any(location_actions(payload).values())
+        assert repository.load_state(sid) == before
+
+
+def test_location_content_service_failure(runtime):
+    app, _, repository, sid, _ = runtime
+
+    app.state.django_content_client = None
+
+    before = repository.load_state(sid)
+
+    response = get_locations(runtime)
+
+    assert response.status_code == 503
+    assert repository.load_state(sid) == before
+
+
+def test_location_response_does_not_expose_private_rules(runtime):
+    response = get_locations(runtime)
+
+    assert response.status_code == 200
+
+    payload = response.json()
+
+    for location in payload["locations"]:
+        assert set(location) == {
+            "id", "accessible", "actions", "subspaces",
+        }
+
+        for action in location["actions"]:
+            assert set(action) == {"actionId", "available"}
+
+        for subspace in location["subspaces"]:
+            assert set(subspace) == {
+                "id", "accessible", "actions",
+            }
+
+            for action in subspace["actions"]:
+                assert set(action) == {
+                    "actionId", "available",
+                }
+
+def test_location_exact_action_mapping(runtime):
+    response = get_locations(runtime)
+
+    assert response.status_code == 200
+
+    actual = {}
+
+    for location in response.json()["locations"]:
+        actual[location["id"]] = {
+            item["actionId"]
+            for item in location["actions"]
+        }
+
+        for subspace in location["subspaces"]:
+            actual[subspace["id"]] = {
+                item["actionId"]
+                for item in subspace["actions"]
+            }
+
+    assert actual == {
+        "lobby": set(),
+        "desk": {
+            "inspect-e19-a",
+            "inspect-e21-a",
+        },
+        "corridor": set(),
+        "stairs": {"inspect-sensor-record"},
+        "records": {"inspect-e13-a"},
+        "admin": {"inspect-e14-a"},
+        "office": {"inspect-e20-a"},
+        "security": {"inspect-emergency-door-record"},
+        "exit": set(),
+        "album": {"inspect-e11-a"},
+        "student": {"inspect-e12-a"},
+        "counsel": set(),
+    }
+
+
+def test_location_unmapped_actions_not_exposed(runtime):
+    from crimescene.api.investigation_http import (
+        ACTION_CANDIDATES,
+    )
+
+    app, _, repository, sid, _ = runtime
+
+    before = repository.load_state(sid)
+
+    app.state.approved_investigation_actions |= frozenset({
+        "inspect-e26-a",
+        "inspect-e27-a",
+        "inspect-e29-a",
+    })
+
+    response = get_locations(runtime)
+
+    assert response.status_code == 200
+
+    exposed = set(location_actions(response.json()))
+
+    assert len(exposed) == 9
+    assert exposed.issubset(ACTION_CANDIDATES)
+
+    hidden = set(ACTION_CANDIDATES) - exposed
+
+    assert {
+        "inspect-e26-a",
+        "inspect-e27-a",
+        "inspect-e29-a",
+    }.issubset(hidden)
+
+    for action_id in hidden:
+        assert action_id not in response.text
+
+    assert repository.load_state(sid) == before
+
+
+def test_location_other_chapter_actions_unavailable(runtime):
+    from crimescene.api.investigation_http import (
+        ACTION_CANDIDATES,
+    )
+
+    app, _, repository, sid, _ = runtime
+
+    before = repository.load_state(sid)
+
+    app.state.approved_investigation_actions = frozenset(
+        action_id
+        for action_id, candidate in ACTION_CANDIDATES.items()
+        if candidate.chapter != before.current_chapter
+    )
+
+    response = get_locations(runtime)
+
+    assert response.status_code == 200
+
+    actions = location_actions(response.json())
+
+    assert not any(actions.values())
+
+    assert repository.load_state(sid) == before
+
+
+def test_location_django_prerequisite_enforced(runtime):
+    _, _, repository, sid, settings = runtime
+
+    settings["django_prerequisites"] = ["E22"]
+
+    before = repository.load_state(sid)
+
+    response = get_locations(runtime)
+
+    assert response.status_code == 200
+
+    actions = location_actions(response.json())
+
+    assert actions["inspect-sensor-record"] is False
+
+    assert repository.load_state(sid) == before
+
+
+def test_location_repeated_get_is_read_only(runtime):
+    _, _, repository, sid, _ = runtime
+
+    before = repository.load_state(sid)
+    selection_before = repository.load_selection(sid)
+
+    first = get_locations(runtime)
+    second = get_locations(runtime)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json() == second.json()
+
+    assert repository.load_state(sid) == before
+    assert repository.load_selection(sid) == selection_before

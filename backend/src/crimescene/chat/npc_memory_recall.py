@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from collections.abc import Sequence
 
 from crimescene.chat.npc_dialogue_intent import (
+    FIRST_RECALL_PATTERN,
     NPCDialogueIntent,
     classify_npc_dialogue_intent,
 )
@@ -74,6 +75,20 @@ def is_memory_recall_question(question: str) -> bool:
     )
 
 
+def is_first_memory_recall_question(question: str) -> bool:
+    """현재 NPC의 첫 보존 대화 조회 요청을 판별한다."""
+
+    if not isinstance(question, str):
+        return False
+
+    normalized = " ".join(question.split())
+
+    return (
+        len(normalized) <= 120
+        and FIRST_RECALL_PATTERN.fullmatch(normalized) is not None
+    )
+
+
 def build_memory_recall_reply(
     character_id: str,
     question: str,
@@ -138,6 +153,12 @@ def build_memory_recall_reply(
     if summary is None:
         return UNKNOWN_QUESTION_REPLY
 
+    if is_first_memory_recall_question(question):
+        return (
+            f"{RECALL_OPENERS[character_id]} "
+            f"남아 있는 첫 대화 기록을 보면, {summary}"
+        )
+
     return f"{RECALL_OPENERS[character_id]} {summary}"
 
 
@@ -148,9 +169,18 @@ def build_memory_recall_from_history(
     *,
     current_revision: int,
 ) -> str | None:
-    """Use only the last exchange from the current NPC history."""
+    """현재 NPC의 첫 기록 또는 마지막 기록만 사용한다."""
 
-    previous = history[-1] if history else None
+    previous = None
+
+    if history:
+        index = (
+            0
+            if is_first_memory_recall_question(question)
+            else -1
+        )
+
+        previous = history[index]
 
     return build_memory_recall_reply(
         character_id,

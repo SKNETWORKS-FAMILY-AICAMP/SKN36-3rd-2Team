@@ -25,6 +25,16 @@ IDENTITY_PATTERN = re.compile(
     r"[.!?~]*"
 )
 
+FIRST_RECALL_PATTERN = re.compile(
+    r"(?:제가\s*(?:처음에|맨 처음에)\s*"
+    r"어떤\s*(?:이야기|말)로\s*대화를\s*시작했는지"
+    r"\s*기억하세요"
+    r"|제가\s*(?:처음에|맨 처음에)\s*"
+    r"어떤 질문을 했는지 기억하세요"
+    r"|우리의 첫 질문을 기억하세요)"
+    r"[.!?~]*"
+)
+
 RECALL_PATTERN = re.compile(
     r"(?:(?:아까|방금|이전에|조금 전에)"
     r"\s*(?:뭐라고|무슨 말을|어떤 말을)"
@@ -43,13 +53,18 @@ FOLLOW_UP_PATTERN = re.compile(
     r"좀 더 자세히 말해 ?주세요|"
     r"왜 그런 거죠|왜요|그래서요|"
     r"그 이후에는요|그다음에는요|"
-    r"무슨 뜻이에요|무슨 말이에요)"
+    r"무슨 뜻이에요|무슨 말이에요|"
+    r"(?:그 사람|그분)에 대해\s*"
+    r"방금 말씀하신 내용을\s*"
+    r"좀 더 설명해 ?주세요)"
     r"[.!?~]*"
 )
 
 PRESSURE_PATTERN = re.compile(
     r"거짓말|숨기고|솔직하게|솔직히|"
-    r"수상하|모순|말이 안|믿을 수 없"
+    r"수상하|모순|말이 안|믿을 수 없|"
+    r"같은 질문을\s*(?:계속해서|반복해서)\s*불편하신가요|"
+    r"계속 같은 질문을\s*해서\s*불편하신가요"
 )
 
 
@@ -107,7 +122,10 @@ def classify_npc_dialogue_intent(
         if IDENTITY_PATTERN.fullmatch(normalized):
             return NPCDialogueIntent.IDENTITY
 
-        if RECALL_PATTERN.fullmatch(normalized):
+        if (
+            RECALL_PATTERN.fullmatch(normalized)
+            or FIRST_RECALL_PATTERN.fullmatch(normalized)
+        ):
             return NPCDialogueIntent.RECALL
 
         if FOLLOW_UP_PATTERN.fullmatch(normalized):

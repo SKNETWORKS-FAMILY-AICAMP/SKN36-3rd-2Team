@@ -24,8 +24,39 @@ PRESSURE_PATTERN = re.compile(
     r"|혹시\s*거짓말하고\s*계세요"
     r"|뭔가\s*숨기고\s*있죠"
     r"|숨기는\s*게\s*있나요"
+    r"|같은 질문을\s*계속해서\s*불편하신가요"
+    r"|같은 질문을\s*반복해서\s*불편하신가요"
+    r"|계속 같은 질문을\s*해서\s*불편하신가요"
     r")[.!?~]*"
 )
+
+REPEATED_QUESTION_PATTERN = re.compile(
+    r"(?:같은 질문을\s*(?:계속해서|반복해서)"
+    r"\s*불편하신가요"
+    r"|계속 같은 질문을\s*해서\s*불편하신가요)"
+    r"[.!?~]*"
+)
+
+REPEATED_QUESTION_REPLIES = MappingProxyType({
+    "C01": "질문을 계속하셔도 됩니다. 하나씩 확인하시죠.",
+    "C02": "확인할 부분이 있다면 다시 질문하시죠.",
+    "C03": "아, 다시 확인하고 싶으신 거군요.",
+    "C04": "확인할 부분을 구체적으로 말씀하세요.",
+    "C05": "괜찮습니다. 천천히 확인해 보세요.",
+    "C06": "필요한 부분부터 다시 질문해 주세요.",
+    "C07": "아, 아직 궁금한 게 있으신가 봐요.",
+    "C08": "다시 확인할 부분을 말씀하시죠.",
+    "C09": "필요한 질문이라면 계속하셔도 됩니다.",
+    "C10": "어느 부분이 더 궁금하신 건가요?",
+})
+
+
+def _reply_for_question(character_id, question):
+    if REPEATED_QUESTION_PATTERN.fullmatch(question.strip()):
+        return REPEATED_QUESTION_REPLIES[character_id]
+
+    return PRESSURE_REPLIES[character_id]
+
 
 PRESSURE_REPLIES = MappingProxyType({
     "C01": "어떤 부분을 의심하시는 겁니까?",
@@ -97,7 +128,7 @@ def build_pressure_reply(
 
     return (
         MOOD_PREFIXES[emotion.mood]
-        + PRESSURE_REPLIES[character_id]
+        + _reply_for_question(character_id, question)
     )
 
 
@@ -120,6 +151,6 @@ def is_approved_pressure_reply(
         return False
 
     return answer in {
-        prefix + PRESSURE_REPLIES[character_id]
+        prefix + _reply_for_question(character_id, question)
         for prefix in MOOD_PREFIXES.values()
     }

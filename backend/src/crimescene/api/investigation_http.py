@@ -3,7 +3,7 @@
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
-from fastapi import APIRouter, Cookie, HTTPException, Request
+from fastapi import APIRouter, Cookie, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from crimescene.api.django_content_client import (
@@ -254,6 +254,52 @@ ACTION_CANDIDATES = {
 }
 
 
+
+# Issue #211 - Public investigation location contract.
+LOCATION_LAYOUT = (
+    ("lobby", (), (
+        ("desk", ("inspect-e19-a", "inspect-e21-a")),
+        ("corridor", ()),
+    )),
+    ("stairs", ("inspect-sensor-record",), ()),
+    ("records", ("inspect-e13-a",), (
+        ("admin", ("inspect-e14-a",)),
+    )),
+    ("office", ("inspect-e20-a",), ()),
+    ("security", ("inspect-emergency-door-record",), (
+        ("exit", ()),
+    )),
+    ("album", ("inspect-e11-a",), (
+        ("student", ("inspect-e12-a",)),
+    )),
+    ("counsel", (), ()),
+)
+
+
+class LocationActionResponse(BaseModel):
+    actionId: str
+    available: bool
+
+
+class LocationSubspaceResponse(BaseModel):
+    id: str
+    accessible: bool
+    actions: list[LocationActionResponse]
+
+
+class LocationItemResponse(BaseModel):
+    id: str
+    accessible: bool
+    actions: list[LocationActionResponse]
+    subspaces: list[LocationSubspaceResponse]
+
+
+class InvestigationLocationsResponse(BaseModel):
+    currentChapter: str
+    revision: int
+    locations: list[LocationItemResponse]
+
+
 class InvestigationRequest(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -293,25 +339,13 @@ def create_investigation_router(
 ) -> APIRouter:
     router = APIRouter()
 
-    @router.post(
-        "/api/games/{session_id}/investigations/{action_id}",
-        response_model=InvestigationResponse,
-    )
-    def investigate(
+    def prepare_investigation_action(
+        state: GameState,
         session_id: str,
         action_id: str,
-        body: InvestigationRequest,
         request: Request,
-        case001_owner: str | None = Cookie(default=None),
-    ) -> InvestigationResponse:
-        state = load_owned_request(
-            session_id,
-            request,
-            case001_owner,
-        )
-
-        if state.revision != body.expectedRevision:
-            raise HTTPException(409, "Game state changed")
+    ):
+        """Validate an action without committing game state."""
 
         if (
             state.content_version != "case001_1120"
@@ -534,6 +568,143 @@ def create_investigation_router(
 
         if not set(requirements.prerequisites).issubset(acquired):
             raise HTTPException(403, "Requirements not satisfied")
+
+        return (
+            action,
+            acquired,
+            rules,
+            selected_policy,
+            staged,
+            active_npc,
+        )
+
+    @router.get(
+        "/api/games/{session_id}/locations",
+        response_model=InvestigationLocationsResponse,
+    )
+    def list_investigation_locations(
+        session_id: str,
+        request: Request,
+        response: Response,
+        case001_owner: str | None = Cookie(default=None),
+    ) -> InvestigationLocationsResponse:
+        """Return public location and action availability."""
+
+        state = load_owned_request(
+            session_id,
+            request,
+            case001_owner,
+        )
+
+        accessible = (
+            state.content_version == "case001_1120"
+            and state.phase == GamePhase.INVESTIGATION
+            and state.outcome in (None, "ONGOING")
+            and state.current_chapter != "CH00"
+            and state.current_chapter in state.unlocked_chapters
+        )
+
+        def action_status(
+            action_id: str,
+        ) -> LocationActionResponse:
+            available = False
+
+            if accessible:
+                try:
+                    prepare_investigation_action(
+                        state,
+                        session_id,
+                        action_id,
+                        request,
+                    )
+                    available = True
+
+                except HTTPException as exc:
+                    # Expected access denial is represented
+                    # as an unavailable investigation action.
+                    if exc.status_code not in (403, 404, 409):
+                        raise
+
+            return LocationActionResponse(
+                actionId=action_id,
+                available=available,
+            )
+
+        locations = [
+            LocationItemResponse(
+                id=location_id,
+                accessible=accessible,
+                actions=[
+                    action_status(action_id)
+                    for action_id in action_ids
+                ],
+                subspaces=[
+                    LocationSubspaceResponse(
+                        id=subspace_id,
+                        accessible=accessible,
+                        actions=[
+                            action_status(action_id)
+                            for action_id in subspace_actions
+                        ],
+                    )
+                    for subspace_id, subspace_actions in subspaces
+                ],
+            )
+            for location_id, action_ids, subspaces
+            in LOCATION_LAYOUT
+        ]
+
+        # Reject inconsistent snapshots after content service calls.
+        latest = load_owned_request(
+            session_id,
+            request,
+            case001_owner,
+        )
+
+        if latest != state:
+            raise HTTPException(409, "Game state changed")
+
+        response.headers["Cache-Control"] = "private, no-store"
+
+        return InvestigationLocationsResponse(
+            currentChapter=state.current_chapter,
+            revision=state.revision,
+            locations=locations,
+        )
+
+    @router.post(
+        "/api/games/{session_id}/investigations/{action_id}",
+        response_model=InvestigationResponse,
+    )
+    def investigate(
+        session_id: str,
+        action_id: str,
+        body: InvestigationRequest,
+        request: Request,
+        case001_owner: str | None = Cookie(default=None),
+    ) -> InvestigationResponse:
+        state = load_owned_request(
+            session_id,
+            request,
+            case001_owner,
+        )
+
+        if state.revision != body.expectedRevision:
+            raise HTTPException(409, "Game state changed")
+
+        (
+            action,
+            acquired,
+            rules,
+            selected_policy,
+            staged,
+            active_npc,
+        ) = prepare_investigation_action(
+            state,
+            session_id,
+            action_id,
+            request,
+        )
 
         try:
             progress = get_collection_progress(state, rules)

@@ -28,6 +28,9 @@ from crimescene.api.expanded_release_runtime import (
     BASE_URL,
     load_expanded_release_resources,
 )
+from crimescene.api.expanded_truth_runtime import (
+    configure_expanded_truth,
+)
 from crimescene.trigger.atomic_dialogue import SQLiteCase001Repository
 
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
@@ -64,8 +67,11 @@ DB_PATH = Path(
 ).expanduser().resolve()
 
 TOKEN_PATH = RELEASE_ROOT / "service-token.txt"
+TRUTH_PATH = RELEASE_ROOT / "expanded_case_truth.json"
 
 RUNTIME_ATTRIBUTES = (
+    "case_truth",
+    "expanded_truth_ready",
     "dialogue_resources",
     "dialogue_policies",
     "dialogue_triggers",
@@ -93,6 +99,7 @@ async def expanded_lifespan(
     """Load and verify all published runtime components."""
 
     app.state.expanded_runtime_ready = False
+    app.state.expanded_truth_ready = False
 
     token = TOKEN_PATH.read_text(
         encoding="utf-8-sig"
@@ -182,6 +189,26 @@ async def expanded_lifespan(
 
             else:
                 print("E30 CONSENT REVIEW: NOT CONFIGURED")
+
+            require_truth = os.getenv(
+                "CRIMESCENE_REQUIRE_EXPANDED_TRUTH",
+                "false",
+            ).strip().lower()
+
+            if require_truth not in {"true", "false"}:
+                raise ValueError(
+                    "Invalid expanded truth requirement"
+                )
+
+            app.state.expanded_truth_ready = (
+                configure_expanded_truth(
+                    app=app,
+                    manifest=manifest,
+                    release_version=RELEASE_VERSION,
+                    truth_path=TRUTH_PATH,
+                    required=require_truth == "true",
+                )
+            )
 
             app.state.expanded_runtime_ready = True
 

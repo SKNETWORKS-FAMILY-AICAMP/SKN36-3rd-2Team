@@ -67,7 +67,7 @@ export default function Evidence({ embedded = false, onNpcSelect, onClose }: Emb
   return (
     <div className={`${styles.page} ${embedded ? styles.embedded : ''}`}>
       {!embedded && <><TopNav /><Toasts /></>}
-      <main className={styles.main}>
+      <main className={`${styles.main} ${compareMode && picks.length === 2 ? styles.comparing : ""}`}>
         <section className={styles.desk} aria-label="증거 목록">
           <header className={`${styles.head} page-head`}>
             <div>
@@ -181,7 +181,7 @@ export default function Evidence({ embedded = false, onNpcSelect, onClose }: Emb
                     <p className={styles.body}>{(cur ? cur.body : detail.body) ?? "증거 원문은 아직 서버에서 제공되지 않았습니다."}</p>
                     <button
                       type="button"
-                      className="btn btn--sm"
+                      className={`btn btn--sm ${styles.askBtn}`}
                       disabled={draft.includes(detail.id) || draft.length >= MAX_DRAFT}
                       onClick={() => { if (!addDraft(detail.id)) return; if (embedded) onClose?.(); else navigate('/chat') }}
                     >

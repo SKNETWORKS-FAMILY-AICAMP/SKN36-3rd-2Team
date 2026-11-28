@@ -16,6 +16,7 @@ from crimescene.chat.npc_session import (
 from crimescene.chat.npc_session_repository import SQLiteNPCSessionRepository
 from crimescene.chat.npc_memory_recall import (
     build_memory_recall_reply,
+    is_first_memory_recall_question,
     is_memory_recall_question,
 )
 from crimescene.chat.npc_pressure_dialogue import (
@@ -508,16 +509,24 @@ class SQLiteCase001Repository(SQLiteNPCSessionRepository):
             ):
                 raise ValueError("NPC 선택 상태 또는 revision이 변경됐습니다.")
 
-            # Revalidate recall against the latest persisted question.
-            # This runs under the same BEGIN IMMEDIATE transaction.
+            # 동일 트랜잭션에서 저장된 기억을 재검증한다.
             if memory_recall:
+                order = (
+                    "ASC"
+                    if is_first_memory_recall_question(
+                        exchange.user_message
+                    )
+                    else "DESC"
+                )
+
+                # 정렬 방향은 서버가 결정한 고정 상수만 사용한다.
                 previous = db.execute(
-                    '''
+                    f'''
                     SELECT user_message, state_revision
                     FROM npc_exchanges
                     WHERE session_id = ?
                       AND character_id = ?
-                    ORDER BY id DESC
+                    ORDER BY id {order}
                     LIMIT 1
                     ''',
                     (

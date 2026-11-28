@@ -589,7 +589,7 @@ export default function Chat({ embedded = false, npcId: npcProp, onNpcSelect }: 
                       aria-pressed={savedIds.has(`${npc.id}:${message.text}`)}
                       aria-label={savedIds.has(`${npc.id}:${message.text}`) ? '진술 저장 취소' : '진술 저장'}
                       title={embedded ? (savedIds.has(`${npc.id}:${message.text}`) ? '저장 취소' : '진술 저장') : undefined}
-                      onClick={() => toggleStatement({ id: `${npc.id}:${message.text}`, npcId: npc.id, text: message.text })}
+                      onClick={() => toggleStatement({ id: `${npc.id}:${message.text}`, npcId: npc.id, text: message.text, question: messages[i - 1]?.role === 'player' ? messages[i - 1].text : undefined })}
                     >
                       {embedded ? <Pin size={15} /> : savedIds.has(`${npc.id}:${message.text}`) ? '저장됨 ✓' : '진술 저장'}
                     </button>

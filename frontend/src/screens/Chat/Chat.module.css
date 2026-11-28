@@ -149,9 +149,11 @@ li:nth-child(even) .polaroid { transform: rotate(1.4deg); }
 /* 사진 경계를 흐려 방과 섞고, 낮은 조명 색감으로 */
 .embedded .portrait { width: 100%; height: auto; max-height: 100%; aspect-ratio: auto; object-fit: contain; object-position: center bottom; background: none; filter: sepia(.3) saturate(.8) brightness(.82) contrast(1.08); -webkit-mask-image: linear-gradient(to bottom, transparent, #000 9%), linear-gradient(to right, transparent, #000 14%, #000 86%, transparent); -webkit-mask-composite: source-in; mask-image: linear-gradient(to bottom, transparent, #000 9%), linear-gradient(to right, transparent, #000 14%, #000 86%, transparent); mask-composite: intersect; }
 .embedded .chat { min-width: 0; padding: 12px; border: 1px solid var(--ink-700); border-radius: 12px; background: rgba(24,22,21,.55); backdrop-filter: blur(3px); }
-.embedded .chatHead { justify-content: space-between; padding: 0 0 8px; background: none; }
-.embedded .chatHead span { display: none; }
-.latest { padding: 4px 10px; font: inherit; font-size: 12px; color: var(--paper-200); background: #211d19; border: 1px solid var(--brass-500); border-radius: 9px; cursor: pointer; }
+.embedded .chatHead { align-items: baseline; padding: 0 0 8px; background: none; }
+/* 이미 공개된 역할만 이름 옆에 보인다 */
+.embedded .chatHead b, .latest { flex: none; white-space: nowrap; }
+.embedded .chatHead span { min-width: 0; font-size: 14px; }
+.latest { margin-left: auto; padding: 4px 10px; font: inherit; font-size: 12px; color: var(--paper-200); background: #211d19; border: 1px solid var(--brass-500); border-radius: 9px; cursor: pointer; }
 .latest:hover { background: #423322; }
 .embedded .list { padding: 0; gap: 6px; }
 .embedded .msg, .embedded .me { justify-content: flex-start; padding: 10px; background: rgba(37,33,29,.72); border-radius: 5px; }

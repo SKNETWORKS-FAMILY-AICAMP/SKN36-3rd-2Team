@@ -1,8 +1,9 @@
 """Issue #165 - owner-scoped objective and inference API."""
 
 from collections.abc import Callable
+from types import MappingProxyType
 
-from fastapi import APIRouter, Cookie, HTTPException, Request
+from fastapi import APIRouter, Cookie, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from crimescene.api.django_content_client import (
@@ -16,6 +17,61 @@ from crimescene.scenario.investigation_progress import (
 )
 from crimescene.scenario.schemas.game_state import GameState
 from crimescene.trigger.atomic_dialogue import SQLiteCase001Repository
+
+
+# Issue #213: 플레이어에게 공개할 수 있는 목표 문구만 관리한다.
+# 원본 힌트, 증거 ID 및 내부 완료 조건은 반환하지 않는다.
+OBJECTIVE_DISPLAY_TEXT = MappingProxyType({
+    "OBJ_FIND_STUDENT_RECORD": (
+        "학생 기록 조사",
+        "사진에서 지워진 이름과 관련된 학생 기록을 확인하세요.",
+    ),
+    "OBJ_CHECK_SCHOLARSHIP": (
+        "장학금 기록 대조",
+        "확보한 회람 자료를 장학금 수령 기록과 비교하세요.",
+    ),
+    "OBJ_CHECK_SIGNOFF": (
+        "학적 변경 승인 확인",
+        "관련 승인 기록의 서명과 날짜를 확인하세요.",
+    ),
+    "OBJ_TALK_SEOMIRAN": (
+        "학적 변경 경위 조사",
+        "서미란에게 2016년 학적 변경 경위를 질문하세요.",
+    ),
+    "OBJ_CHECK_2016_VIDEO": (
+        "과거 영상 자료 조사",
+        "2016년 행사 당시의 촬영 자료를 확인하세요.",
+    ),
+    "OBJ_VERIFY_DEPARTURE": (
+        "당시 이탈 경위 조사",
+        "확보한 자료를 토대로 이후의 이동 경위를 확인하세요.",
+    ),
+    "OBJ_CHECK_DRAFT_EMAIL": (
+        "신기범의 일정 확인",
+        "신기범이 남긴 일정과 메일 관련 자료를 조사하세요.",
+    ),
+    "OBJ_FIND_CARD_USER": (
+        "임시 카드 사용자 조사",
+        "카드 사용 기록과 다른 자료를 비교해 사용자를 좁혀 보세요.",
+    ),
+    "OBJ_FIND_SHUTDOWN_REASON": (
+        "CCTV 중단 원인 조사",
+        "CCTV가 중단된 이유를 관련 기록을 통해 확인하세요.",
+    ),
+    "OBJ_RECONSTRUCT_ROUTE": (
+        "사건 당시 동선 재구성",
+        "계단 주변의 이동 시각과 경로를 비교하세요.",
+    ),
+    "OBJ_CHECK_REFLECTION": (
+        "사진 속 인물 조사",
+        "사진에 비친 인물의 알리바이를 확인하세요.",
+    ),
+})
+
+DEFAULT_OBJECTIVE_DISPLAY = (
+    "수사 목표",
+    "현재 공개된 자료와 인물을 조사하세요.",
+)
 
 
 class InferenceRequest(BaseModel):
@@ -42,6 +98,9 @@ class InferenceResponse(BaseModel):
 class ObjectiveItem(BaseModel):
     objectiveId: str
     status: str
+    chapter: str
+    title: str
+    description: str
 
 
 class ObjectiveResponse(BaseModel):
@@ -63,6 +122,7 @@ def create_inference_router(
     def list_objectives(
         session_id: str,
         request: Request,
+        response: Response,
         case001_owner: str | None = Cookie(default=None),
     ) -> ObjectiveResponse:
         state = load_owned_request(
@@ -94,12 +154,22 @@ def create_inference_router(
             if status == "LOCKED":
                 continue
 
+            title, description = OBJECTIVE_DISPLAY_TEXT.get(
+                rule.objective_id,
+                DEFAULT_OBJECTIVE_DISPLAY,
+            )
+
             items.append(
                 ObjectiveItem(
                     objectiveId=rule.objective_id,
                     status=status,
+                    chapter=rule.chapter,
+                    title=title,
+                    description=description,
                 )
             )
+
+        response.headers["Cache-Control"] = "private, no-store"
 
         return ObjectiveResponse(items=items)
 

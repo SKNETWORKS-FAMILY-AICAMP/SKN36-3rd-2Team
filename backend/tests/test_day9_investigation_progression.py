@@ -545,30 +545,226 @@ def test_day9_investigation_session_restore(runtime):
 
 
 def test_day9_investigation_npc_access(runtime):
-    """현재 해금된 NPC만 선택할 수 있어야 한다."""
+    """CH01 진입 이후 NPC 10명을 모두 선택할 수 있다."""
 
     _, client, repository, sid, _ = runtime
 
-    start_ch01(runtime)
+    npc_ids = [
+        f"C{i:02d}" for i in range(1, 11)
+    ]
+
+    # CH00에서는 기존 초기 상태를 유지한다.
+    assert get_game(runtime)["unlockedCharacters"] == ["C01"]
 
     before = get_state(runtime)
-    game = get_game(runtime)
-
-    assert game["unlockedCharacters"] == ["C01"]
 
     denied = client.post(
         f"/api/games/{sid}/characters/C02/select"
     )
 
-    assert denied.status_code == 403
+    assert denied.status_code == 409
     assert get_state(runtime) == before
 
-    allowed = client.post(
-        f"/api/games/{sid}/characters/C01/select"
+    start_ch01(runtime)
+
+    assert get_game(runtime)["unlockedCharacters"] == npc_ids
+
+    for npc_id in npc_ids:
+        response = client.post(
+            f"/api/games/{sid}/characters/{npc_id}/select"
+        )
+
+        assert response.status_code == 200, response.text
+
+        payload = response.json()
+
+        assert payload["activeCharacterId"] == npc_id
+        assert payload["unlockedCharacters"] == npc_ids
+
+        assert_game_consistency(runtime)
+
+    before = get_state(runtime)
+
+    invalid = client.post(
+        f"/api/games/{sid}/characters/C99/select"
     )
 
-    assert allowed.status_code == 200
-    assert allowed.json()["activeCharacterId"] == "C01"
+    assert invalid.status_code == 422
+    assert get_state(runtime) == before
+
+
+def test_expanded_npc_publication_events(runtime):
+    """최초 공개 이벤트는 한 번만 발생한다."""
+
+    _, client, _, sid, _ = runtime
+
+    completed = client.post(
+        f"/api/games/{sid}/prologue/complete"
+    )
+
+    assert completed.status_code == 200
+
+    before = get_state(runtime)
+
+    response = advance(runtime, "CH01")
+
+    assert response.status_code == 200, response.text
+
+    payload = response.json()
+
+    expected_npcs = [
+        f"C{i:02d}" for i in range(1, 11)
+    ]
+
+    assert payload["unlockedCharacters"] == expected_npcs
+    assert payload["revision"] == before.revision + 1
+
+    events = [
+        event for event in payload["events"]
+        if event["type"] == "NPC_UNLOCKED"
+    ]
+
+    assert events == [
+        {
+            "type": "NPC_UNLOCKED",
+            "characterId": npc_id,
+        }
+        for npc_id in expected_npcs[1:]
+    ]
+
+    after = get_state(runtime)
+
+    assert after.evidence == before.evidence
+    assert after.flags == before.flags
+    assert after.presented == before.presented
+    assert after.document_grants == before.document_grants
+    assert after.disclosed_cards == before.disclosed_cards
+    assert after.score == before.score
+
+    # 같은 챕터의 중복 진입을 차단한다.
+    duplicate = advance(runtime, "CH01")
+
+    assert duplicate.status_code == 409
+    assert get_state(runtime) == after
+
+    for action_id, eid in CH01_ACTIONS:
+        collect_action(runtime, action_id, eid)
+
+    for chapter in ("CH02", "CH03", "CH02", "CH03"):
+        response = advance(runtime, chapter)
+
+        assert response.status_code == 200, response.text
+
+        payload = response.json()
+
+        assert payload["unlockedCharacters"] == expected_npcs
+
+        assert not any(
+            event["type"] == "NPC_UNLOCKED"
+            for event in payload["events"]
+        )
+
+        assert_game_consistency(runtime)
+
+
+@pytest.mark.parametrize(
+    "evidence_id",
+    ["E15", "E28", "E30"],
+)
+def test_expanded_npc_access_does_not_grant_evidence(
+    runtime,
+    evidence_id,
+):
+    """NPC 공개 이후에도 미수집 증거 제시는 차단한다."""
+
+    _, client, repository, sid, _ = runtime
+
+    start_ch01(runtime)
+
+    selected = client.post(
+        f"/api/games/{sid}/characters/C05/select"
+    )
+
+    assert selected.status_code == 200
+
+    before = get_state(runtime)
+    selection = repository.load_selection(sid)
+
+    assert evidence_id not in before.evidence
+
+    response = client.post(
+        f"/api/games/{sid}/chat",
+        json={
+            "question": "이 자료에 대해 설명해 주세요.",
+            "presentedEvidenceId": evidence_id,
+        },
+    )
+
+    assert response.status_code == 403, response.text
+    assert get_state(runtime) == before
+    assert repository.load_selection(sid) == selection
+
+    evidence = client.get(
+        f"/api/games/{sid}/evidence"
+    )
+
+    assert evidence.status_code == 200
+    assert evidence.json()["collectedCount"] == 0
+
+    assert evidence_id not in {
+        item["evidenceId"]
+        for item in evidence.json()["items"]
+    }
+
+
+def test_expanded_npc_access_existing_session(runtime):
+    """기존 확장판 세션의 챕터 전환 시 공개 상태를 정상화한다."""
+
+    from crimescene.scenario.schemas.game_state import GameState
+
+    _, _, repository, sid, _ = runtime
+
+    prepare_branches(runtime)
+
+    current = get_state(runtime)
+
+    # 수정 이전에 저장된 확장판 세션을 재현한다.
+    old_state = GameState.model_validate({
+        **current.model_dump(),
+        "unlocked_characters": ["C01"],
+        "revision": current.revision + 1,
+    })
+
+    repository.commit_state(
+        expected_state=current,
+        updated_state=old_state,
+    )
+
+    assert get_game(runtime)["unlockedCharacters"] == ["C01"]
+
+    response = advance(runtime, "CH02")
+
+    assert response.status_code == 200, response.text
+
+    payload = response.json()
+    after = get_state(runtime)
+
+    assert payload["unlockedCharacters"] == [
+        f"C{i:02d}" for i in range(1, 11)
+    ]
+
+    assert after.evidence == old_state.evidence
+    assert after.score == old_state.score
+    assert after.flags == old_state.flags
+    assert after.presented == old_state.presented
+    assert after.document_grants == old_state.document_grants
+
+    assert after.revision == old_state.revision + 1
+
+    assert len([
+        event for event in payload["events"]
+        if event["type"] == "NPC_UNLOCKED"
+    ]) == 9
 
     assert_game_consistency(runtime)
 

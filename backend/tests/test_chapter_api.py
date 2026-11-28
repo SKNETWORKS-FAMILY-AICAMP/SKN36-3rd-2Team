@@ -110,6 +110,15 @@ def test_sequential_chapter_progress(runtime):
         assert persisted.current_chapter == target
         assert persisted.revision == result["revision"]
 
+        # Issue #223 must not alter legacy NPC unlock policy.
+        assert persisted.unlocked_characters == before.unlocked_characters
+        assert result["unlockedCharacters"] == before.unlocked_characters
+
+        assert not any(
+            event["type"] == "NPC_UNLOCKED"
+            for event in result["events"]
+        )
+
         # NPC 선택 정보의 revision도 함께 갱신돼야 합니다.
         selection = repository.load_selection(session_id)
 

@@ -21,6 +21,11 @@ CHAPTER_ORDER: tuple[ChapterCode, ...] = (
 
 VALID_EVIDENCE_STAGES = frozenset({"found", "resolved"})
 
+# Issue #223: expanded NPC access is public from CH01.
+EXPANDED_PUBLIC_NPC_IDS = tuple(
+    f"C{i:02d}" for i in range(1, 11)
+)
+
 
 @dataclass(frozen=True, slots=True)
 class ChapterUnlockRule:
@@ -211,11 +216,21 @@ def advance_chapter(
         ):
             raise PermissionError("필수 증거 제시 기록이 없습니다.")
 
+    # NPC access and confidential information access are separate.
+    unlocked_characters = list(state.unlocked_characters)
+
+    if (
+        state.content_version == "case001_1120"
+        and next_chapter in {"CH01", "CH02", "CH03", "CH04"}
+    ):
+        unlocked_characters = list(EXPANDED_PUBLIC_NPC_IDS)
+
     # 검증된 상태만 생성하고 기존 객체는 변경하지 않습니다.
     return GameState.model_validate(
         {
             **state.model_dump(mode="python"),
             "current_chapter": next_chapter,
+            "unlocked_characters": unlocked_characters,
             "unlocked_chapters": (
                 list(state.unlocked_chapters)
                 if revisit

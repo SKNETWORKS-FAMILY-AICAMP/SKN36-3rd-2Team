@@ -947,6 +947,12 @@ def create_app(
                 detail="게임 상태가 변경되었습니다.",
             ) from None
 
+        newly_unlocked = [
+            character_id
+            for character_id in updated.unlocked_characters
+            if character_id not in state.unlocked_characters
+        ]
+
         return game_response(
             updated,
             events=[
@@ -954,6 +960,13 @@ def create_app(
                     "type": "CHAPTER_CHANGED",
                     "chapter": updated.current_chapter,
                 },
+                *[
+                    {
+                        "type": "NPC_UNLOCKED",
+                        "characterId": character_id,
+                    }
+                    for character_id in newly_unlocked
+                ],
                 {
                     "type": "GAME_PROGRESS_UPDATED",
                 },

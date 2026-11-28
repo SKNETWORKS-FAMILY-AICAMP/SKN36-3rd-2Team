@@ -23,6 +23,14 @@ from crimescene.chat.npc_pressure_dialogue import (
     is_approved_pressure_reply,
 )
 from crimescene.chat.npc_social_dialogue import is_approved_social_reply
+from crimescene.chat.npc_semantic_router import (
+    is_approved_semantic_social_reply,
+    semantic_state_allowed,
+)
+from crimescene.chat.npc_semantic_memory import (
+    semantic_memory_kind,
+    build_semantic_memory_reply,
+)
 from crimescene.retriever.npc_output_guard import NPCGroundedReply
 from crimescene.retriever.npc_response_gate import FALLBACK_REPLY
 from crimescene.scenario.loaders.unlock_graph_loader import Case001UnlockRules
@@ -425,6 +433,7 @@ class SQLiteCase001Repository(SQLiteNPCSessionRepository):
                 raise ValueError("검증되지 않은 화면 응답입니다.")
 
         memory_recall = False
+        memory_kind = None
 
         if not reply.grounded:
             is_safe_social = is_approved_social_reply(
@@ -440,6 +449,33 @@ class SQLiteCase001Repository(SQLiteNPCSessionRepository):
                 and expected_state.content_version == "case001_1120"
                 and is_memory_recall_question(exchange.user_message)
             )
+
+            memory_kind = (
+                semantic_memory_kind(reply.text)
+                if (
+                    not reply.source_ids
+                    and semantic_state_allowed(expected_state)
+                )
+                else None
+            )
+
+            if (
+                memory_kind is not None
+                and turn.display_text != reply.text
+            ):
+                raise ValueError("Memory display mismatch")
+
+            is_safe_semantic = is_approved_semantic_social_reply(
+                turn.character_id,
+                reply.text,
+                state=expected_state,
+            )
+
+            if (
+                is_safe_semantic
+                and turn.display_text != reply.text
+            ):
+                raise ValueError("Semantic display mismatch")
 
             is_safe_pressure = is_approved_pressure_reply(
                 turn.character_id,
@@ -457,6 +493,8 @@ class SQLiteCase001Repository(SQLiteNPCSessionRepository):
             if reply.source_ids or (
                 reply.text != FALLBACK_REPLY
                 and not is_safe_social
+                and not is_safe_semantic
+                and memory_kind is None
                 and not memory_recall
                 and not is_safe_pressure
             ):
@@ -508,6 +546,64 @@ class SQLiteCase001Repository(SQLiteNPCSessionRepository):
                 or selection["revision"] != expected_state.revision
             ):
                 raise ValueError("NPC 선택 상태 또는 revision이 변경됐습니다.")
+
+            # 의미 기반 기억도 동일한 트랜잭션에서 검증한다.
+            if memory_kind is not None:
+
+                order = "ASC" if memory_kind == "first" else "DESC"
+
+                previous_memory = db.execute(
+                    f"""
+                    SELECT
+                        user_message,
+                        npc_message,
+                        source_ids_json,
+                        state_revision
+                    FROM npc_exchanges
+                    WHERE session_id = ?
+                      AND character_id = ?
+                    ORDER BY id {order}
+                    LIMIT 1
+                    """,
+                    (
+                        expected_state.session_id,
+                        turn.character_id,
+                    ),
+                ).fetchone()
+
+                expected_memory = build_semantic_memory_reply(
+                    turn.character_id,
+                    kind=memory_kind,
+                    previous_question=(
+                        previous_memory["user_message"]
+                        if previous_memory is not None
+                        else None
+                    ),
+                    previous_revision=(
+                        previous_memory["state_revision"]
+                        if previous_memory is not None
+                        else None
+                    ),
+                    previous_answer=(
+                        previous_memory["npc_message"]
+                        if previous_memory is not None
+                        else None
+                    ),
+                    previous_source_ids=(
+                        json.loads(previous_memory["source_ids_json"])
+                        if previous_memory is not None
+                        else ()
+                    ),
+                    current_revision=expected_state.revision,
+                )
+
+                if (
+                    expected_memory is None
+                    or reply.text != expected_memory
+                ):
+                    raise ValueError(
+                        "검증되지 않은 의미 기반 기억 응답"
+                    )
 
             # 동일 트랜잭션에서 저장된 기억을 재검증한다.
             if memory_recall:

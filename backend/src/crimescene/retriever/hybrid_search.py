@@ -9,7 +9,10 @@ from crimescene.ingest.ollama_embedder import OllamaEmbedder
 from crimescene.retriever.dense_search import (
     search_dense_candidates,
 )
-from crimescene.retriever.korean_bm25 import KoreanBM25Encoder
+from crimescene.retriever.korean_bm25 import (
+    KoreanBM25Encoder,
+    NoSearchKeywordsError,
+)
 from crimescene.retriever.rrf_fusion import (
     HybridSearchCandidate,
     fuse_rrf_candidates,
@@ -116,16 +119,20 @@ def search_hybrid_candidates(
     )
 
     # 9. Kiwi + BM25 Sparse 검색
-    sparse_results = search_sparse_candidates(
-        query,
-        client=client,
-        encoder=encoder,
-        source_type=source_type,
-        case_id=case_id,
-        character_id=character_id,
-        top_k=candidate_k,
-        collection_name=collection_name,
-    )
+    try:
+        sparse_results = search_sparse_candidates(
+            query,
+            client=client,
+            encoder=encoder,
+            source_type=source_type,
+            case_id=case_id,
+            character_id=character_id,
+            top_k=candidate_k,
+            collection_name=collection_name,
+        )
+    except NoSearchKeywordsError:
+        # 키워드가 없는 자연어에서도 나머지 검색 경로를 유지한다.
+        sparse_results = []
 
     # 10. RRF 검색 결과 결합
     hybrid_results = fuse_rrf_candidates(

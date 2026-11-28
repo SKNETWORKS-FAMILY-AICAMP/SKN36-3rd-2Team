@@ -5,12 +5,30 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 
 from crimescene.chat.llm_client import generate_npc_json
+from crimescene.chat.npc_relevance_guard import (
+    RelevanceDecision,
+    judge_reply_relevance,
+)
+from crimescene.chat.npc_semantic_memory import (
+    build_semantic_memory_from_history,
+)
+from crimescene.chat.npc_semantic_router import (
+    SemanticRoute,
+    semantic_enabled,
+    semantic_state_allowed,
+    classify_semantic_route,
+    resolve_semantic_followup,
+    build_semantic_social_reply,
+    build_semantic_search_suffix,
+    natural_refusal,
+)
 from crimescene.chat.npc_memory_recall import (
     build_memory_recall_from_history,
     is_memory_recall_question,
 )
 from crimescene.chat.npc_conversation_memory import (
     build_revalidated_repeat_output,
+    is_allowed_contextual_repeat,
 )
 from crimescene.chat.npc_dialogue_intent import build_npc_intent_prompt
 from crimescene.chat.npc_dynamic_persona import build_dynamic_npc_prompt
@@ -26,6 +44,14 @@ from crimescene.chat.npc_history_context import (
     build_contextual_npc_reply_plan,
 )
 from crimescene.chat.npc_natural_reply import render_npc_speech
+from crimescene.chat.npc_pilot_speech import (
+    pilot_speech_enabled,
+    render_pilot_speech,
+)
+from crimescene.chat.npc_pilot_speech import (
+    pilot_speech_enabled,
+    render_pilot_speech,
+)
 from crimescene.chat.npc_rag_service import (
     NPCRAGResources,
     prepare_npc_chat_rag,
@@ -40,6 +66,7 @@ from crimescene.chat.npc_reaction import (
     detect_npc_reaction,
 )
 from crimescene.chat.npc_session import (
+    MAX_MESSAGE_LENGTH,
     NPCExchange,
     NPCSessionStore,
 )
@@ -256,12 +283,118 @@ def run_npc_chat(
     # 3. Hybrid RAG 검색 및 권한 검증
     # ==================================================
 
+    semantic_active = (
+        semantic_enabled()
+        and semantic_state_allowed(state)
+        and not evidence_turn
+    )
+
+    semantic_route = SemanticRoute.INVESTIGATION
+    semantic_suffix = ""
+
+    if semantic_active:
+        if (
+            not isinstance(query, str)
+            or not query.strip()
+            or len(query.strip()) > MAX_MESSAGE_LENGTH
+        ):
+            raise ValueError("Invalid player question")
+
+        character_id = session_store.get_active_npc(state)
+
+        if character_id not in state.unlocked_characters:
+            raise PermissionError("NPC unavailable")
+
+        history = session_store.get_history(
+            state,
+            character_id,
+        )
+
+        semantic_route = classify_semantic_route(
+            query,
+            history,
+            current_revision=state.revision,
+        )
+
+        semantic_route = resolve_semantic_followup(
+            semantic_route,
+            history,
+            current_revision=state.revision,
+        )
+
+        social_reply = build_semantic_social_reply(
+            character_id,
+            semantic_route,
+        )
+
+        if semantic_route in {
+            SemanticRoute.RECALL_FIRST,
+            SemanticRoute.RECALL_LAST,
+        }:
+            social_reply = build_semantic_memory_from_history(
+                character_id,
+                history,
+                kind=(
+                    "first"
+                    if semantic_route is SemanticRoute.RECALL_FIRST
+                    else "last"
+                ),
+                current_revision=state.revision,
+            ) or FALLBACK_REPLY
+
+        if (
+            social_reply is not None
+            or semantic_route is SemanticRoute.BLOCKED
+        ):
+            answer = (
+                social_reply
+                if social_reply is not None
+                else FALLBACK_REPLY
+            )
+
+            if (
+                state.revision != initial_revision
+                or session_store.get_active_npc(state)
+                != character_id
+            ):
+                raise RuntimeError("NPC state changed")
+
+            reply = NPCGroundedReply(
+                text=answer,
+                source_ids=(),
+                grounded=False,
+            )
+
+            exchange = session_store.append_verified_exchange(
+                state,
+                character_id,
+                user_message=query,
+                reply=reply,
+            )
+
+            return NPCChatTurn(
+                character_id=character_id,
+                reply=reply,
+                exchange=exchange,
+                display_text=answer,
+            )
+
+        semantic_suffix = build_semantic_search_suffix(
+            semantic_route,
+            history,
+            current_revision=state.revision,
+        )
+
     rag_result = prepare_npc_chat_rag(
         query,
         state=state,
         session_store=session_store,
         resources=resources,
         matched_topics=topics,
+        **(
+            {"semantic_vector_suffix": semantic_suffix}
+            if semantic_suffix else {}
+        ),
         **(
             {"evidence_dialogue": evidence_dialogue}
             if evidence_dialogue is not None else {}
@@ -290,6 +423,7 @@ def run_npc_chat(
     # ==================================================
 
     emotion = None
+    cached_output = None
 
     if (
         state.content_version == "case001_1120"
@@ -364,6 +498,15 @@ def run_npc_chat(
                 evidence_just_presented=evidence_turn,
             )
 
+        if semantic_active:
+            intent_suffix += (
+                "\n\n[SEMANTIC DIALOGUE]\n"
+                f"질문 의미: {semantic_route.value}\n"
+                "표현이 달라도 질문의 실제 의미를 이해한다.\n"
+                "복합 질문에서는 승인 근거로 답할 수 있는 부분만 답한다.\n"
+                "근거가 없는 부분을 추측하거나 무관한 인용으로 채우지 않는다."
+            )
+
         evidence_suffix = ""
 
         if evidence_dialogue is not None:
@@ -399,8 +542,6 @@ def run_npc_chat(
         )
 
         # Reuse only a currently authorized, exact matching reply.
-        cached_output = None
-
         if (
             state.content_version == "case001_1120"
             and not evidence_turn
@@ -455,11 +596,62 @@ def run_npc_chat(
     # 5. 반복 인용 응답 처리
     # ==================================================
 
-    # 서로 다른 질문에 같은 인용문이 반복되는 경우
-    # 기존 정책대로 fallback으로 처리
+    # 무관한 반복 응답은 차단한다.
+    # 정상적인 재확인은 현재 승인 근거와 함께 재검증한다.
+    semantic_relevant = False
+
+    if semantic_active and reply.grounded:
+        relevance = judge_reply_relevance(
+            query,
+            reply,
+            rag_result.history,
+            context=context,
+            current_revision=state.revision,
+            require_previous_grounded=(
+                semantic_route is SemanticRoute.ELABORATE
+            ),
+        )
+
+        semantic_relevant = relevance in {
+            RelevanceDecision.DIRECT,
+            RelevanceDecision.PARTIAL,
+        }
+
+        if not semantic_relevant:
+            reply = NPCGroundedReply(
+                text=FALLBACK_REPLY,
+                source_ids=(),
+                grounded=False,
+            )
+
+    contextual_repeat = False
+
+    if (
+        reply.grounded
+        and state.content_version == "case001_1120"
+        and not evidence_turn
+    ):
+        contextual_repeat = is_allowed_contextual_repeat(
+            query,
+            rag_result.history,
+            current_revision=state.revision,
+            context=context,
+            reply_text=reply.text,
+            source_ids=reply.source_ids,
+        )
     if (
         reply.grounded
         and not evidence_just_presented
+        and not contextual_repeat
+        and not (
+            semantic_relevant
+            and semantic_route in {
+                SemanticRoute.IDENTITY,
+                SemanticRoute.RELATIONSHIP,
+                SemanticRoute.FOLLOW_UP,
+            }
+        )
+        and cached_output is None
         and any(
             previous.npc_message == reply.text
             and previous.user_message.strip() != query.strip()
@@ -538,6 +730,49 @@ def run_npc_chat(
         )
         display_text = FALLBACK_REPLY
 
+    if (
+        semantic_active
+        and not reply.grounded
+        and reply.text == FALLBACK_REPLY
+    ):
+        display_text = natural_refusal(character_id)
+
+    # 기존 Guard와 렌더러를 모두 통과한 경우에만
+    # 파일럿 자연어 대사를 사용한다.
+    if (
+        semantic_active
+        and pilot_speech_enabled()
+        and not evidence_turn
+        and reply.grounded
+        and display_text != FALLBACK_REPLY
+    ):
+        speech = render_pilot_speech(
+            reply.text,
+            reply.source_ids,
+            character_id,
+        )
+
+        if speech is not None:
+            display_text = speech
+
+    # 기존 Guard와 렌더러를 모두 통과한 경우에만
+    # 파일럿 자연어 대사를 사용한다.
+    if (
+        semantic_active
+        and pilot_speech_enabled()
+        and not evidence_turn
+        and reply.grounded
+        and display_text != FALLBACK_REPLY
+    ):
+        speech = render_pilot_speech(
+            reply.text,
+            reply.source_ids,
+            character_id,
+        )
+
+        if speech is not None:
+            display_text = speech
+
     # Keep canonical quotes for memory validation.
     # Persist presentation separately for expanded grounded turns.
     exchange = session_store.append_verified_exchange(
@@ -549,7 +784,10 @@ def run_npc_chat(
             {"display_text": display_text}
             if (
                 state.content_version == "case001_1120"
-                and reply.grounded
+                and (
+                    reply.grounded
+                    or display_text != reply.text
+                )
             )
             else {}
         ),

@@ -28,6 +28,14 @@ from crimescene.chat.npc_memory_recall import (
 from crimescene.chat.npc_pressure_dialogue import (
     is_approved_pressure_reply,
 )
+from crimescene.chat.npc_semantic_router import (
+    is_approved_semantic_social_reply,
+    semantic_state_allowed,
+)
+from crimescene.chat.npc_semantic_memory import (
+    semantic_memory_kind,
+    build_semantic_memory_from_history,
+)
 from crimescene.chat.npc_social_dialogue import (
     is_approved_social_reply,
 )
@@ -398,6 +406,30 @@ class NPCSessionStore:
             and is_memory_recall_question(question)
         )
 
+        memory_kind = (
+            semantic_memory_kind(answer)
+            if (
+                not reply.grounded
+                and not source_ids
+                and semantic_state_allowed(state)
+            )
+            else None
+        )
+
+        def validate_semantic_memory(history):
+            if memory_kind is None:
+                return
+
+            expected = build_semantic_memory_from_history(
+                character_id,
+                history,
+                kind=memory_kind,
+                current_revision=state.revision,
+            )
+
+            if expected is None or expected != answer:
+                raise ValueError("검증되지 않은 의미 기반 기억 응답")
+
         # 승인된 근거가 있는 응답만 저장한다.
         if reply.grounded:
             if not source_ids:
@@ -410,6 +442,12 @@ class NPCSessionStore:
                 question,
                 answer,
             )
+            and not is_approved_semantic_social_reply(
+                character_id,
+                answer,
+                state=state,
+            )
+            and memory_kind is None
             and not memory_recall
             and not is_approved_pressure_reply(
                 character_id,
@@ -479,6 +517,14 @@ class NPCSessionStore:
                             "검증되지 않은 기억 응답입니다."
                         )
 
+                if memory_kind is not None:
+                    validate_semantic_memory(
+                        self._repository.load_history(
+                            state.session_id,
+                            character_id,
+                        )
+                    )
+
                 self._repository.append_exchange(
                     state.session_id,
                     character_id,
@@ -511,6 +557,7 @@ class NPCSessionStore:
                         "검증되지 않은 기억 응답입니다."
                     )
 
+            validate_semantic_memory(tuple(history))
             history.append(exchange)
             session.latest_revision = state.revision
 

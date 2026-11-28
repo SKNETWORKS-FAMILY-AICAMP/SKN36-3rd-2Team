@@ -28,6 +28,10 @@ STOPWORDS = {
 }
 
 
+class NoSearchKeywordsError(ValueError):
+    """유효한 입력에 검색 가능한 형태소가 없는 경우."""
+
+
 class KoreanBM25Encoder:
     """한국어 텍스트를 BM25 Sparse Vector로 변환한다."""
 
@@ -86,7 +90,7 @@ class KoreanBM25Encoder:
             tokens.append(word)
 
         if not tokens:
-            raise ValueError("검색에 사용할 키워드를 추출하지 못했습니다.")
+            raise NoSearchKeywordsError("검색에 사용할 키워드를 추출하지 못했습니다.")
 
         return tokens
 

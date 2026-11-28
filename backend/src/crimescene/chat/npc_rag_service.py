@@ -173,6 +173,7 @@ def prepare_npc_chat_rag(
     evidence_top_k: int = 10,
     top_k: int = 10,
     use_memory_context: bool = False,
+    semantic_vector_suffix: str = "",
     evidence_dialogue: EvidenceDialogueContext | None = None,
 ) -> NPCChatRAGResult:
     """현재 NPC에 한정된 Hybrid RAG 응답 계획을 생성한다.
@@ -284,6 +285,25 @@ def prepare_npc_chat_rag(
             search_question = question
 
     vector_query = None
+
+    if semantic_vector_suffix:
+        if (
+            state.content_version != "case001_1120"
+            or evidence_dialogue is not None
+            or not use_memory_context
+            or not isinstance(semantic_vector_suffix, str)
+            or len(semantic_vector_suffix) > 200
+            or any(
+                c in semantic_vector_suffix
+                for c in ("\n", "\r", "\x00")
+            )
+        ):
+            raise ValueError("Invalid semantic search suffix")
+
+        # 원래 질문과 접근 정책은 유지하고
+        # 벡터 검색에만 문맥을 추가한다.
+        search_question = question
+        vector_query = f"{question} {semantic_vector_suffix}"
 
     if evidence_dialogue is not None:
         expanded = build_evidence_search_query(
